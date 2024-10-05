@@ -79,7 +79,7 @@ def open_dataset(dataset_folder, batch_size, shuffle=True):
     dataset = wds.WebDataset(url, shardshuffle=True).decode(decode_pattern).to_tuple('ppm', 'cls', 'pyd').map_tuple(preprocessing, identity, identity)
 
   # create loader
-  loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=multiprocessing.cpu_count(), drop_last=True, pin_memory=True)
+  loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=0, drop_last=True, pin_memory=True)
 
   avg = avg.cuda()
   std = std.cuda()
