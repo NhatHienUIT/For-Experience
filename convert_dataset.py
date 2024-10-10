@@ -147,14 +147,15 @@ def main():
   else:
     print("Incorrect dataset name. Returning.")
     return
-  print("Length of the training dataset: %d." % (len(dtrain_data)))
-  print("Length of the validation dataset: %d." % (len(dvalidation_data)))
-  print("Length of the testing dataset: %d." % (len(dtest_data)))
 
   # Create the webdataset
   create_webdataset(base_pattern=train_folder, dataset=dtrain_data, m=m, s=s, n=n, names=names)
   create_webdataset(base_pattern=validation_folder, dataset=dvalidation_data, m=m, s=s, n=n, names=names)
   create_webdataset(base_pattern=test_folder, dataset=dtest_data, m=m, s=s, n=n, names=names)
+
+  print("Length of the training dataset: %d." % (len(dtrain_data)))
+  print("Length of the validation dataset: %d." % (len(dvalidation_data)))
+  print("Length of the testing dataset: %d." % (len(dtest_data)))
 
   return
 
