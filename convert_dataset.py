@@ -33,7 +33,6 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
                 "cls": label,
                 "pyd": i}
         sink.write(sample)
-        print("converting: %.2f%%." % (100.0 * i / len(dataset)))
 
 
         if i == 0:
