@@ -26,7 +26,7 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
             key = "%.6d" % i
             # Convert torch.Tensor to numpy.ndarray and transpose to H x W x C
             if isinstance(data, torch.Tensor):
-                data = data.permute(1, 2, 0).detach().numpy()  # Transpose from C x H x W to H x W x C
+                data = data.permute(1, 2, 0).cpu().detach().numpy()  # Transpose from C x H x W to H x W x C
 
             sample = {
                 "__key__": key,
@@ -123,9 +123,9 @@ def main():
         n = torch.tensor([62])
         names = [chr(i) for i in range(65, 91)] + [chr(i) for i in range(97, 123)] + [chr(i) for i in range(48, 58)]
     elif args.dataset_name == 'pathmnist':
-        dtrain_data = PathMNIST(split='train', download=True, transform=transforms.ToTensor())
-        dvalidation_data = PathMNIST(split='val', download=True, transform=transforms.ToTensor())
-        dtest_data = PathMNIST(split='test', download=True, transform=transforms.ToTensor())
+        dtrain_data = PathMNIST(split='train', download=True)
+        dvalidation_data = PathMNIST(split='val', download=True)
+        dtest_data = PathMNIST(split='test', download=True)
         m = torch.tensor([0.485, 0.456, 0.406])  # Mean for RGB channels
         s = torch.tensor([0.229, 0.224, 0.225])  # Standard deviation for RGB channels
         n = torch.tensor([9])         
