@@ -44,7 +44,7 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
 
     # Save the number of samples
     torch.save(i + 1, os.path.join(base_pattern, "num_samples.pt"))
-return
+    return
 
 class FontDataset(Dataset):
     def __init__(self, folder='./fonts'):
