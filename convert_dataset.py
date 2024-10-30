@@ -29,9 +29,11 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
             if isinstance(data, torch.Tensor):
                 data = data.numpy()
 
-            # Ensure data has a channel dimension
-            if data.ndim == 2:  # If grayscale image without channel dimension
-                data = np.expand_dims(data, axis=-1)  # Add channel dimension
+            # Ensure data has three channels
+            if data.ndim == 2:  # Grayscale image without channel dimension
+                data = np.stack([data] * 3, axis=-1)  # Duplicate to create 3 channels
+            elif data.shape[2] == 1:  # Grayscale with channel dimension
+                data = np.concatenate([data] * 3, axis=-1)  # Duplicate to create 3 channels
 
             sample = {
                 "__key__": key,
