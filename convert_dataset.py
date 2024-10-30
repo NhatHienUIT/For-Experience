@@ -12,6 +12,7 @@ from medmnist import PathMNIST
 # s: standard deviation (later used for normalization)
 # n: number of classes
 def create_webdataset(base_pattern, dataset, m, s, n, names):
+    # Save mean, standard deviation, and other metadata
     torch.save(m, os.path.join(base_pattern, "m.pt"))
     torch.save(s, os.path.join(base_pattern, "s.pt"))
     torch.save(n, os.path.join(base_pattern, "n.pt"))
@@ -20,12 +21,20 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
     with torch.no_grad():
         pattern = os.path.join(base_pattern, f"data-%06d.tar")
         sink = wds.ShardWriter(pattern, maxcount=10000)
+
         for i, (data, label) in enumerate(dataset):
             key = "%.6d" % i
-            sample = {"__key__": key,
-                      "ppm": data,
-                      "cls": label,
-                      "pyd": i}
+
+            # Convert torch.Tensor to numpy.ndarray
+            if isinstance(data, torch.Tensor):
+                data = data.numpy()
+
+            sample = {
+                "__key__": key,
+                "ppm": data,
+                "cls": label,
+                "pyd": i
+            }
             sink.write(sample)
 
             if i == 0:
@@ -33,9 +42,9 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
 
         sink.close()
 
+    # Save the number of samples
     torch.save(i + 1, os.path.join(base_pattern, "num_samples.pt"))
-
-    return
+return
 
 class FontDataset(Dataset):
     def __init__(self, folder='./fonts'):
