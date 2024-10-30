@@ -127,9 +127,9 @@ def main():
         dtrain_data = PathMNIST(split='train', download=True, transform=transforms.ToTensor())
         dvalidation_data = PathMNIST(split='val', download=True, transform=transforms.ToTensor())
         dtest_data = PathMNIST(split='test', download=True, transform=transforms.ToTensor())
-        m = torch.tensor([0.5])
-        s = torch.tensor([1.0])
-        n = torch.tensor([9])
+        m = torch.tensor([0.485, 0.456, 0.406])  # Mean for RGB channels
+        s = torch.tensor([0.229, 0.224, 0.225])  # Standard deviation for RGB channels
+        n = torch.tensor([9])         
         names = [f'Class_{i}' for i in range(9)]
     else:
         print("Incorrect dataset name. Returning.")
