@@ -29,6 +29,10 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
             if isinstance(data, torch.Tensor):
                 data = data.numpy()
 
+            # Ensure data has a channel dimension
+            if data.ndim == 2:  # If grayscale image without channel dimension
+                data = np.expand_dims(data, axis=-1)  # Add channel dimension
+
             sample = {
                 "__key__": key,
                 "ppm": data,
@@ -44,6 +48,7 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
 
     # Save the number of samples
     torch.save(i + 1, os.path.join(base_pattern, "num_samples.pt"))
+
     return
 
 class FontDataset(Dataset):
