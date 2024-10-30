@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from models.robustifier import Robustifier
 
-class classes(nn.Module):
+class NET(nn.Module):
     def __init__(self, num_classes=9): 
-        super(PathMNISTClassifier, self).__init__()
+        super(NET, self).__init__()
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.pool = nn.MaxPool2d(2, 2)
