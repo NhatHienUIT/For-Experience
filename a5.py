@@ -27,9 +27,9 @@ def parse_argumments():
   parser.add_argument('--no-autoattack', action='store_true', help='do not use autoattack for testing (faster)')
 
   # archs
-  parser.add_argument('--robustifier-arch', type=str, choices=['mnist', 'cifar10', 'tinyimagenet', 'identity'], default='mnist', help='robustifier architecture')
+  parser.add_argument('--robustifier-arch', type=str, choices=['mnist', 'cifar10', 'tinyimagenet', 'identity', 'path'], default='mnist', help='robustifier architecture')
   parser.add_argument('--acquisition-arch', type=str, choices=['identity', 'camera'], default='identity', help='acquisition device architecture')
-  parser.add_argument('--classifier-arch', type=str, choices=['mnist', 'cifar10', 'tinyimagenet', 'fonts'], default='mnist', help='classifier architecture')
+  parser.add_argument('--classifier-arch', type=str, choices=['mnist', 'cifar10', 'tinyimagenet', 'fonts','path'], default='mnist', help='classifier architecture')
 
   # dataset
   parser.add_argument('--training-dataset-folder', type=str, default=None, help='training dataset folder (default: None)')
