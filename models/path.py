@@ -23,7 +23,7 @@ class classes(nn.Module):
 def classifier_path()
     return classes
 
-def robustifier(x_min, x_max, x_avg, x_std, x_epsilon_defense):
+def robustifier_path(x_min, x_max, x_avg, x_std, x_epsilon_defense):
     convolutional_dnn = nn.Sequential(
         nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1, padding=1),
         nn.ReLU(),
