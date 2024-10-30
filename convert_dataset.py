@@ -27,7 +27,7 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
             print (data.size())
             # Convert torch.Tensor to numpy.ndarray and transpose to H x W x C
             if isinstance(data, torch.Tensor):
-                data = data.permute(1, 2, 0).numpy()  # Transpose from C x H x W to H x W x C
+                data = data.permute(1, 2, 0).detach().numpy()  # Transpose from C x H x W to H x W x C
 
             sample = {
                 "__key__": key,
