@@ -20,7 +20,7 @@ class classes(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
-def classifier_path()
+def classifier_path():
     return classes
 
 def robustifier_path(x_min, x_max, x_avg, x_std, x_epsilon_defense):
