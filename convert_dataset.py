@@ -25,15 +25,9 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
         for i, (data, label) in enumerate(dataset):
             key = "%.6d" % i
 
-            # Convert torch.Tensor to numpy.ndarray
+            # Convert torch.Tensor to numpy.ndarray and transpose to H x W x C
             if isinstance(data, torch.Tensor):
-                data = data.numpy()
-
-            # Ensure data has three channels
-            if data.ndim == 2:  # Grayscale image without channel dimension
-                data = np.stack([data] * 3, axis=-1)  # Duplicate to create 3 channels
-            elif data.shape[2] == 1:  # Grayscale with channel dimension
-                data = np.concatenate([data] * 3, axis=-1)  # Duplicate to create 3 channels
+                data = data.permute(1, 2, 0).numpy()  # Transpose from C x H x W to H x W x C
 
             sample = {
                 "__key__": key,
@@ -50,6 +44,7 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
 
     # Save the number of samples
     torch.save(i + 1, os.path.join(base_pattern, "num_samples.pt"))
+
 
     return
 
