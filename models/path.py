@@ -6,7 +6,7 @@ from models.robustifier import Robustifier
 class Net(nn.Module):
     def __init__(self, num_classes=9): 
         super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
@@ -26,7 +26,7 @@ def classifier_path():
 
 def robustifier_path(x_min, x_max, x_avg, x_std, x_epsilon_defense):
     convolutional_dnn = nn.Sequential(
-        nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, stride=1, padding=1),
+        nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1),
         nn.ReLU(),
         nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
         nn.ReLU(),
