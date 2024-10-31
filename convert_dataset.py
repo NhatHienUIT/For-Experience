@@ -18,15 +18,20 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
     torch.save(n, os.path.join(base_pattern, "n.pt"))
     torch.save(names, os.path.join(base_pattern, "names.pt"))
 
+    print("Metadata saved.")
+
     with torch.no_grad():
         pattern = os.path.join(base_pattern, f"data-%06d.tar")
         sink = wds.ShardWriter(pattern, maxcount=10000)
+        print(f"Saving .tar files with pattern: {pattern}")
 
         for i, (data, label) in enumerate(dataset):
             key = "%.6d" % i
+
             # Convert torch.Tensor to numpy.ndarray and transpose to H x W x C
             if isinstance(data, torch.Tensor):
-                data = data.permute(1, 2, 0).cpu().detach().numpy()  # Transpose from C x H x W to H x W x C
+                data = data.permute(1, 2, 0).cpu().detach().numpy()
+                print(f"Sample {i} - Data shape after transpose: {data.shape}")
 
             sample = {
                 "__key__": key,
@@ -38,12 +43,18 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
 
             if i == 0:
                 torch.save(np.shape(data), os.path.join(base_pattern, "size.pt"))
+                print(f"First sample shape saved as size.pt: {np.shape(data)}")
+
+            # Print only the first few samples
+            if i < 5:
+                print(f"Sample {i} written with key {key}, label: {label}")
 
         sink.close()
+        print("All samples written to .tar files.")
 
     # Save the number of samples
     torch.save(i + 1, os.path.join(base_pattern, "num_samples.pt"))
-
+    print(f"Total samples saved: {i + 1}")
 
     return
 
