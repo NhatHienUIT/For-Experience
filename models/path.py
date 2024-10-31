@@ -19,7 +19,7 @@ class Net(nn.Module):
             nn.Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(128 * 28 * 28, 512),  # Adjust this linear layer based on input image size
+            nn.Linear(128 * 14 * 14, 512),  # Adjust this linear layer based on input image size
             nn.ReLU(),
             nn.Linear(512, 9)  # PathMNIST has 9 classes
         )
