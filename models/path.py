@@ -28,7 +28,7 @@ class Net(nn.Module):
         logits = self.model(x)
         return logits
 
-def classifier_pathmnist():
+def classifier_pathm():
     return Net()
 
 
