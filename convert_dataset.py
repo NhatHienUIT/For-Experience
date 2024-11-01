@@ -41,7 +41,7 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
                 print(f"First sample shape saved as size.pt: {np.shape(data)}")
 
             # Print only the first few samples
-            if i < 5:
+            if i < 40:
                 print(f"Sample {i} written with key {key}, label: {label}")
 
         sink.close()
