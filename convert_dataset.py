@@ -140,7 +140,7 @@ def main():
         m = torch.tensor([0.485, 0.456, 0.406])  # Mean for RGB channels
         s = torch.tensor([0.229, 0.224, 0.225])  # Standard deviation for RGB channels
         n = torch.tensor([9])         
-        names = [f'Class_{i}' for i in range(9)]
+        names = [f'{i}' for i in range(9)]
     else:
         print("Incorrect dataset name. Returning.")
         return
