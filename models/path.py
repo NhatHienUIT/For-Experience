@@ -38,7 +38,7 @@ def robustifier_path(x_min, x_max, x_avg, x_std, x_epsilon_defense):
         nn.ReLU(),
         nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),
         nn.ReLU(),
-        nn.Conv2d(32, 1, kernel_size=3, stride=1, padding=1)
+        nn.Conv2d(32, 3, kernel_size=3, stride=1, padding=1)
     )
     return Robustifier(x_min, x_max, x_avg, x_std, x_epsilon_defense, convolutional_dnn).cuda()
 
