@@ -27,11 +27,6 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
 
         for i, (data, label) in enumerate(dataset):
             key = "%.6d" % i
-
-            # Convert torch.Tensor to numpy.ndarray and transpose to H x W x C
-            if isinstance(data, torch.Tensor):
-                data = data.permute(1, 2, 0).cpu().detach().numpy()
-                print(f"Sample {i} - Data shape after transpose: {data.shape}")
             label = label.item() if isinstance(label, torch.Tensor) else int(label[0])
             sample = {
                 "__key__": key,
