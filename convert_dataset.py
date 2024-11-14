@@ -5,6 +5,7 @@ from torch.utils.data import Dataset
 import numpy as np
 import medmnist
 from medmnist import PathMNIST
+import torchvision.datasets as datasets
 
 # base_pattern: base folder for storing the dataset
 # dataset: dataset (pytorch format)
