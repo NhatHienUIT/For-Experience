@@ -28,7 +28,7 @@ def create_webdataset(base_pattern, dataset, m, s, n, names):
 
         for i, (data, label) in enumerate(dataset):
             key = "%.6d" % i
-            label = label.item() if isinstance(label, torch.Tensor) else int(label[0])
+            #label = label.item() if isinstance(label, torch.Tensor) else int(label[0])
             sample = {
                 "__key__": key,
                 "ppm": data,
