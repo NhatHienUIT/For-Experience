@@ -75,16 +75,16 @@ def parse_argumments():
 
   # verbose
   parser.add_argument('--verbose', action='store_true', help='verbose')
-
+  # norm
+  parser.add_argument('--attack-norm', type=float, default=np.inf, choices=[1.0, 2.0, np.inf], help='Lp norm to use for attacks and perturbations (1.0 for L1, 2.0 for L2, np.inf for L-inf)')
   args = parser.parse_args()
 
   return args
 
 
 def compute_predictions_and_loss(classifier, normalized_x, normalized_x_min, normalized_x_max, normalized_x_epsilon, f, bound_type, y, num_classes, ce):
-
-  # quick compute for easy case
-  if f == 1:
+    # Quick compute for easy case
+    if f == 1:
     prediction = classifier(normalized_x)  # natural prediction
     reg_ce = ce(prediction, y)
     reg_err = torch.sum(torch.argmax(prediction, dim=1) != y).cpu().detach().numpy() / y.size(0)
@@ -94,7 +94,12 @@ def compute_predictions_and_loss(classifier, normalized_x, normalized_x_min, nor
     return (prediction, reg_ce, reg_err, ver_ce, ver_err, loss)
 
   # prediction: lower and upper bounds (auto_LiRPA) - also use the linear comb in the last layer
-  ptb = PerturbationLpNorm(norm=np.inf, eps=normalized_x_epsilon, x_L=torch.max(normalized_x - normalized_x_epsilon.view(1, -1, 1, 1), normalized_x_min.view(1, -1, 1, 1)), x_U=torch.min(normalized_x + normalized_x_epsilon.view(1, -1, 1, 1), normalized_x_max.view(1, -1, 1, 1)))
+  ptb = PerturbationLpNorm(
+        norm=attack_norm,  # Dynamic norm selection
+        eps=normalized_x_epsilon, 
+        x_L=torch.max(normalized_x - normalized_x_epsilon.view(1, -1, 1, 1), normalized_x_min.view(1, -1, 1, 1)), 
+        x_U=torch.min(normalized_x + normalized_x_epsilon.view(1, -1, 1, 1), normalized_x_max.view(1, -1, 1, 1))
+    )
   data = BoundedTensor(normalized_x, ptb)
 
   c = torch.eye(num_classes).type_as(data)[y].unsqueeze(1) - torch.eye(num_classes).type_as(data).unsqueeze(0).cuda()
@@ -442,8 +447,16 @@ def main():
   if args.test and not(test_loader is None):
 
     # Initialize auto-attack - this is always testing mitm attack
+    norm_map = {1.0: 'L1', 2.0: 'L2', np.inf: 'Linf'}
+    attack_norm_str = norm_map.get(args.attack_norm, 'Linf')
+
     forward_pass = torch.nn.Sequential(normalize, classifier_ori.model)
-    adversary = AutoAttack(forward_pass, norm='Linf', eps=args.x_epsilon_attack_testing, version='standard')
+    adversary = AutoAttack(
+        forward_pass, 
+        norm=attack_norm_str, 
+        eps=args.x_epsilon_attack_testing, 
+        version='standard'
+    )
 
     # z
     z = torch.zeros((test_num_samples, num_channels, height, width), dtype=torch.float32, requires_grad=False, device='cuda')
