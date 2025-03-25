@@ -84,7 +84,7 @@ def parse_argumments():
 
 def compute_predictions_and_loss(classifier, normalized_x, normalized_x_min, normalized_x_max, normalized_x_epsilon, f, bound_type, y, num_classes, ce):
     # Quick compute for easy case
-    if f == 1:
+  if f == 1:
     prediction = classifier(normalized_x)  # natural prediction
     reg_ce = ce(prediction, y)
     reg_err = torch.sum(torch.argmax(prediction, dim=1) != y).cpu().detach().numpy() / y.size(0)
