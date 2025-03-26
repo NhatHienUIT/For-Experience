@@ -286,7 +286,7 @@ def main():
                                                                                               bound_type=args.bound_type,
                                                                                               y=y,
                                                                                               num_classes=num.numpy()[0],
-                                                                                              ce=ce
+                                                                                              ce=ce,
                                                                                               attack_norm=attack_norm)
           vprint("Classified batch data x and computed loss. Memory [allocated %.3fGb [max %.3fGb] reserved %.3fGb [max %.3fGb]." % (torch.cuda.memory_allocated() / (1024 ** 3), torch.cuda.max_memory_allocated() / (1024 ** 3), torch.cuda.memory_reserved() / (1024 ** 3), torch.cuda.max_memory_reserved() / (1024 ** 3)), args.verbose)
 
@@ -350,7 +350,7 @@ def main():
                                                                                                 bound_type=args.bound_type,
                                                                                                 y=y,
                                                                                                 num_classes=num.numpy()[0],
-                                                                                                ce=ce
+                                                                                                ce=ce,
                                                                                                 attack_norm=attack_norm)
             meter.update('reg_ce', reg_ce, args.batch_size)
             meter.update('reg_err', reg_err, args.batch_size)
@@ -504,7 +504,7 @@ def main():
                                                                                               bound_type=args.bound_type,
                                                                                               y=y,
                                                                                               num_classes=num.numpy()[0],
-                                                                                              ce=ce
+                                                                                              ce=ce,
                                                                                               attack_norm=attack_norm)
 
           meter.update('reg_ce', reg_ce, args.batch_size)
