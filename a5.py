@@ -95,7 +95,7 @@ def compute_predictions_and_loss(classifier, normalized_x, normalized_x_min, nor
 
   # prediction: lower and upper bounds (auto_LiRPA) - also use the linear comb in the last layer
   ptb = PerturbationLpNorm(
-        norm=attack_norm,  # Dynamic norm selection
+        norm=args.attack_norm,  # Dynamic norm selection
         eps=normalized_x_epsilon, 
         x_L=torch.max(normalized_x - normalized_x_epsilon.view(1, -1, 1, 1), normalized_x_min.view(1, -1, 1, 1)), 
         x_U=torch.min(normalized_x + normalized_x_epsilon.view(1, -1, 1, 1), normalized_x_max.view(1, -1, 1, 1))
