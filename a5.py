@@ -82,7 +82,7 @@ def parse_argumments():
   return args
 
 
-def compute_predictions_and_loss(classifier, normalized_x, normalized_x_min, normalized_x_max, normalized_x_epsilon, f, bound_type, y, num_classes, ce):
+def compute_predictions_and_loss(classifier, normalized_x, normalized_x_min, normalized_x_max, normalized_x_epsilon, f, bound_type, y, num_classes, ce, attack_norm):
     # Quick compute for easy case
   if f == 1:
     prediction = classifier(normalized_x)  # natural prediction
@@ -95,7 +95,7 @@ def compute_predictions_and_loss(classifier, normalized_x, normalized_x_min, nor
 
   # prediction: lower and upper bounds (auto_LiRPA) - also use the linear comb in the last layer
   ptb = PerturbationLpNorm(
-        norm=args.attack_norm,  # Dynamic norm selection
+        norm=attack_norm,  # Dynamic norm selection
         eps=normalized_x_epsilon, 
         x_L=torch.max(normalized_x - normalized_x_epsilon.view(1, -1, 1, 1), normalized_x_min.view(1, -1, 1, 1)), 
         x_U=torch.min(normalized_x + normalized_x_epsilon.view(1, -1, 1, 1), normalized_x_max.view(1, -1, 1, 1))
@@ -206,7 +206,7 @@ def main():
 
   # init
   ce = torch.nn.CrossEntropyLoss()
-
+  attack_norm = args.attack_norm
   ###################################################################################################
   # Train
 
@@ -286,7 +286,8 @@ def main():
                                                                                               bound_type=args.bound_type,
                                                                                               y=y,
                                                                                               num_classes=num.numpy()[0],
-                                                                                              ce=ce)
+                                                                                              ce=ce
+                                                                                              attack_norm=attack_norm)
           vprint("Classified batch data x and computed loss. Memory [allocated %.3fGb [max %.3fGb] reserved %.3fGb [max %.3fGb]." % (torch.cuda.memory_allocated() / (1024 ** 3), torch.cuda.max_memory_allocated() / (1024 ** 3), torch.cuda.memory_reserved() / (1024 ** 3), torch.cuda.max_memory_reserved() / (1024 ** 3)), args.verbose)
 
           # loss backward and step
@@ -349,7 +350,8 @@ def main():
                                                                                                 bound_type=args.bound_type,
                                                                                                 y=y,
                                                                                                 num_classes=num.numpy()[0],
-                                                                                                ce=ce)
+                                                                                                ce=ce
+                                                                                                attack_norm=attack_norm)
             meter.update('reg_ce', reg_ce, args.batch_size)
             meter.update('reg_err', reg_err, args.batch_size)
             meter.update('ver_ce', ver_ce, args.batch_size)
@@ -502,7 +504,8 @@ def main():
                                                                                               bound_type=args.bound_type,
                                                                                               y=y,
                                                                                               num_classes=num.numpy()[0],
-                                                                                              ce=ce)
+                                                                                              ce=ce
+                                                                                              attack_norm=attack_norm)
 
           meter.update('reg_ce', reg_ce, args.batch_size)
           meter.update('reg_err', reg_err, args.batch_size)
