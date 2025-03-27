@@ -446,7 +446,7 @@ def main():
   ###################################################################################################
   # Test
 
-   if args.test and not(test_loader is None):
+  if args.test and not(test_loader is None):
         # Initialize auto-attack and other existing setup code...
 
         meter = MultiAverageMeter()
@@ -498,15 +498,11 @@ def main():
         # Write test results log
         with open(os.path.join(logger.eval_dir, 'test_eval.txt'), 'w') as ff:
             ff.write(s + '\n')
-            
-            # Optionally, write more detailed metrics
-            for metric, value in final_results.items():
-                ff.write(f"{metric}: {value}\n")
-
+    
   ###################################################################################################
   # Return
 
-   return 0
+  return 0
 
 
 if __name__=="__main__":
