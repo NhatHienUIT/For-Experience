@@ -446,7 +446,7 @@ def main():
   ###################################################################################################
   # Test
 
- if args.test and not(test_loader is None):
+  if args.test and not(test_loader is None):
 
         # Initialize auto-attack - this is always testing mitm attack
         norm_map = {1.0: 'L1', 2.0: 'L2', np.inf: 'Linf'}
@@ -617,7 +617,7 @@ def main():
 
         print(f"Comprehensive test results saved to {test_log_path}")
 
-    return 0
+  return 0
 
 
 if __name__=="__main__":
