@@ -446,7 +446,7 @@ def main():
   ###################################################################################################
   # Test
 
- if args.test and not(test_loader is None):
+   if args.test and not(test_loader is None):
         # Initialize auto-attack and other existing setup code...
 
         meter = MultiAverageMeter()
@@ -506,7 +506,7 @@ def main():
   ###################################################################################################
   # Return
 
-  return 0
+   return 0
 
 
 if __name__=="__main__":
