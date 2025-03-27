@@ -460,7 +460,26 @@ def main():
                 batch_meter = MultiAverageMeter()
                 
                 for (i, (w, y, idxs)) in enumerate(test_loader):
-                    # Existing test batch processing code remains the same...
+                    w = w.cuda()
+                    y = y.cuda()
+                    idxs = idxs.cuda()
+          
+                    # Be sure to use the same dataset in training and testing
+                    w_rob = zx2x_rob(z=torch.gather(z, 0, idxs.view(-1, 1, 1, 1).expand(args.batch_size, num_channels, height, width)), x=w, x_epsilon=torch.tensor([args.w_epsilon_defense]).float().cuda(), xD_min=torch.tensor([0.0]).float().cuda(), xD_max=torch.tensor([1.0]).float().cuda())
+                    x = acquisition(w_rob, tr1, tr2)
+                    normalized_x = normalize(x)
+                    normalized_x_rob = robustifier(normalized_x)
+                    (prediction, reg_ce, reg_err, ver_ce, ver_err, loss) = compute_predictions_and_loss(classifier=classifier,
+                                                                                                        normalized_x=normalized_x_rob,
+                                                                                                        normalized_x_min=normalized_x_min,
+                                                                                                        normalized_x_max=normalized_x_max,
+                                                                                                        normalized_x_epsilon=normalized_x_epsilon_attack,
+                                                                                                        f=f,
+                                                                                                        bound_type=args.bound_type,
+                                                                                                        y=y,
+                                                                                                        num_classes=num.numpy()[0],
+                                                                                                        ce=ce)
+
                     
                     batch_meter.update('reg_ce', reg_ce, args.batch_size)
                     batch_meter.update('reg_err', reg_err, args.batch_size)
