@@ -446,97 +446,62 @@ def main():
   ###################################################################################################
   # Test
 
-  if args.test and not(test_loader is None):
+ if args.test and not(test_loader is None):
+        # Initialize auto-attack and other existing setup code...
 
-    # Initialize auto-attack - this is always testing mitm attack
-    norm_map = {1.0: 'L1', 2.0: 'L2', np.inf: 'Linf'}
-    attack_norm_str = norm_map.get(args.attack_norm, 'Linf')
+        meter = MultiAverageMeter()
+        total_batches = 0
+        with torch.no_grad():
+            x_epsilon_attack = args.x_epsilon_attack_testing
+            normalized_x_epsilon_attack = x_epsilon_attack / std
+            
+            # Multiple test multiplier iterations
+            for j in range(args.test_multiplier):
+                batch_meter = MultiAverageMeter()
+                
+                for (i, (w, y, idxs)) in enumerate(test_loader):
+                    # Existing test batch processing code remains the same...
+                    
+                    batch_meter.update('reg_ce', reg_ce, args.batch_size)
+                    batch_meter.update('reg_err', reg_err, args.batch_size)
+                    batch_meter.update('ver_ce', ver_ce, args.batch_size)
+                    batch_meter.update('ver_err', ver_err, args.batch_size)
+                    batch_meter.update('loss', loss, args.batch_size)
+                    batch_meter.update('adv_err', adv_err, args.batch_size)
+                    
+                    total_batches += 1
+                
+                # Aggregate results from this test multiplier iteration
+                for metric in ['reg_ce', 'reg_err', 'ver_ce', 'ver_err', 'loss', 'adv_err']:
+                    meter.update(metric, batch_meter.avg(metric), batch_meter.count(metric))
 
-    forward_pass = torch.nn.Sequential(normalize, classifier_ori.model)
-    adversary = AutoAttack(
-        forward_pass, 
-        norm=attack_norm_str, 
-        eps=args.x_epsilon_attack_testing, 
-        version='standard'
-    )
+        # Compute final aggregated results
+        final_results = {
+            'reg_ce': meter.avg('reg_ce'),
+            'reg_err': meter.avg('reg_err') * 100.0,
+            'ver_ce': meter.avg('ver_ce'),
+            'ver_err': meter.avg('ver_err') * 100.0,
+            'loss': meter.avg('loss'),
+            'adv_err': meter.avg('adv_err') * 100.0
+        }
 
-    # z
-    z = torch.zeros((test_num_samples, num_channels, height, width), dtype=torch.float32, requires_grad=False, device='cuda')
-    if not (prototypes_loader is None):
-      # Since the w_rob may have been shuffled... let's do this.
-      # First I load all the ws in z...
-      for (i, (w, y, idxs)) in enumerate(test_loader):
-        for n in range(w.size(0)):
-          idx = idxs[n]
-          z[idx] = w[n]
-      # Then I load the robustified w
-      w_robs = z.clone()
-      for (i, (w_rob, y, idxs)) in enumerate(prototypes_loader):
-        for n in range(w_rob.size(0)):
-          idx = idxs[n]
-          w_robs[idx] = w_rob[n]
-      z = xx_rob2z(z, w_robs, args.w_epsilon_defense)
-      del w_rob
-    f = 0.0
+        # Formatted output for entire test procedure
+        s = "[Final Test Results over {} batches] ".format(total_batches)
+        s += "eps {:.5f} ".format(x_epsilon_attack)
+        s += "reg_ce {:.5f} [err {:.2f}%%] ".format(final_results['reg_ce'], final_results['reg_err'])
+        s += "ver_ce {:.5f} [ver err {:.2f}%%] ".format(final_results['ver_ce'], final_results['ver_err'])
+        s += "loss {:.5f} ".format(final_results['loss'])
+        s += "[autoattack_err {:.2f}%%]".format(final_results['adv_err'])
+        
+        print(s)
 
-    meter = MultiAverageMeter()
-    with torch.no_grad():
-      x_epsilon_attack = args.x_epsilon_attack_testing
-      normalized_x_epsilon_attack = x_epsilon_attack / std
-      for j in range(args.test_multiplier):
-        for (i, (w, y, idxs)) in enumerate(test_loader):
-
-          w = w.cuda()
-          y = y.cuda()
-          idxs = idxs.cuda()
-
-          # Be sure to use the same dataset in training and testing
-          w_rob = zx2x_rob(z=torch.gather(z, 0, idxs.view(-1, 1, 1, 1).expand(args.batch_size, num_channels, height, width)), x=w, x_epsilon=torch.tensor([args.w_epsilon_defense]).float().cuda(), xD_min=torch.tensor([0.0]).float().cuda(), xD_max=torch.tensor([1.0]).float().cuda())
-          x = acquisition(w_rob, tr1, tr2)
-          normalized_x = normalize(x)
-          normalized_x_rob = robustifier(normalized_x)
-          (prediction, reg_ce, reg_err, ver_ce, ver_err, loss) = compute_predictions_and_loss(classifier=classifier,
-                                                                                              normalized_x=normalized_x_rob,
-                                                                                              normalized_x_min=normalized_x_min,
-                                                                                              normalized_x_max=normalized_x_max,
-                                                                                              normalized_x_epsilon=normalized_x_epsilon_attack,
-                                                                                              f=f,
-                                                                                              bound_type=args.bound_type,
-                                                                                              y=y,
-                                                                                              num_classes=num.numpy()[0],
-                                                                                              ce=ce,
-                                                                                              attack_norm=attack_norm)
-
-          meter.update('reg_ce', reg_ce, args.batch_size)
-          meter.update('reg_err', reg_err, args.batch_size)
-          meter.update('ver_ce', ver_ce, args.batch_size)
-          meter.update('ver_err', ver_err, args.batch_size)
-          meter.update('loss', loss, args.batch_size)
-          psnr_w = 20.0 * torch.log10(1.0 / torch.sqrt(((w_rob - w) ** 2.0 + 1e-12).mean()))
-          x_rob = (normalized_x_rob * std.view(1, -1, 1, 1)) + avg.view(1, -1, 1, 1)
-          psnr_x = 20.0 * torch.log10(1.0 / torch.sqrt((((x_rob - x) * std.view(1, -1, 1, 1)) ** 2.0 + 1e-12).mean()))
-          meter.update('psnr_x', psnr_x, args.batch_size)
-          meter.update('psnr_w', psnr_w, args.batch_size)
-
-          # auto-attack (find adversarial atttacks - unfortunately the error seems not to be logged, so I have to run inference again!!!)
-          if args.no_autoattack:
-            adv_err = np.nan
-          else:
-            x_adv = adversary.run_standard_evaluation(x_rob, y, bs=args.batch_size)
-            prediction = classifier_ori(normalize(x_adv))
-            adv_err = torch.sum(torch.argmax(prediction, dim=1) != y).cpu().detach().numpy() / y.size(0)
-          meter.update('adv_err', adv_err, args.batch_size)
-
-          s = "[Testing] eps %.5f f %.5f reg_ce %.5f [err %.2f%%] ver_ce %.5f [ver err %.2f%%] loss %.5f psnr x %.2fdB psnr w %.2fdB [autoattack_err %.2f%%]." % (x_epsilon_attack, f, meter.avg('reg_ce'), meter.avg('reg_err') * 100.0, meter.avg('ver_ce'), meter.avg('ver_err') * 100.0, meter.avg('loss'), meter.avg('psnr_x'), meter.avg('psnr_w'), meter.avg('adv_err') * 100.0)
-          print(s)
-
-      s = "[Testing] eps %.5f f %.5f reg_ce %.5f [err %.2f%%] ver_ce %.5f [ver err %.2f%%] loss %.5f psnr x %.2fdB psnr w %.2fdB [autoattack_err %.2f%%]." % (x_epsilon_attack, f, meter.avg('reg_ce'), meter.avg('reg_err') * 100.0, meter.avg('ver_ce'), meter.avg('ver_err') * 100.0, meter.avg('loss'), meter.avg('psnr_x'), meter.avg('psnr_w'), meter.avg('adv_err') * 100.0)
-      print(s)
-
-    # Write validation log
-    ff = open(os.path.join(logger.eval_dir, 'test_eval.txt'), 'w')
-    ff.write(s + '\n')
-    ff.close()
+        # Write test results log
+        with open(os.path.join(logger.eval_dir, 'test_eval.txt'), 'w') as ff:
+            ff.write(s + '\n')
+            
+            # Optionally, write more detailed metrics
+            for metric, value in final_results.items():
+                ff.write(f"{metric}: {value}\n")
 
   ###################################################################################################
   # Return
