@@ -63,12 +63,12 @@ def parse_argumments():
   # attack params
   parser.add_argument('--x-epsilon-attack-training', type=float, default=0.1, help='epsilon for MitM attack during training')
   parser.add_argument('--x-epsilon-attack-testing', type=float, default=0.1, help='epsilon for MitM attack during testing')
-  parser.add_argument('--w-epsilon-attack-training', type=float, default=0.1, help='epsilon for physical attack during training')
-  parser.add_argument('--w-epsilon-attack-testing', type=float, default=0.1, help='epsilon for physical attack during testing')
+  parser.add_argument('--w-epsilon-attack-training', type=float, default=0.0, help='epsilon for physical attack during training')
+  parser.add_argument('--w-epsilon-attack-testing', type=float, default=0.0, help='epsilon for physical attack during testing')
 
   # robustifier
   parser.add_argument('--x-epsilon-defense', type=float, default=0.1, help='epsilon for defense (x)')
-  parser.add_argument('--w-epsilon-defense', type=float, default=0.5, help='epsilon for defense (w)')
+  parser.add_argument('--w-epsilon-defense', type=float, default=0.0, help='epsilon for defense (w)')
 
   # auto_LiRPA parameters
   parser.add_argument("--bound-type", type=str, default="CROWN-IBP", choices=["IBP", "CROWN-IBP", "CROWN", "CROWN-FAST"], help='method of bound analysis')
