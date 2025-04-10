@@ -713,7 +713,7 @@ def main():
   ###################################################################################################
   # Test
 
- if args.test and not(test_loader is None):
+  if args.test and not(test_loader is None):
         # Initialize attack based on args.attack_type
         norm_map = {1.0: 'L1', 2.0: 'L2', np.inf: 'Linf'}
         attack_norm_str = norm_map.get(args.attack_norm, 'Linf')
