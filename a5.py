@@ -25,7 +25,13 @@ def parse_argumments():
   parser.add_argument('--train-classifier', action='store_true', help='train classifier')
   parser.add_argument('--test', action='store_true', help='test')
   parser.add_argument('--no-autoattack', action='store_true', help='do not use autoattack for testing (faster)')
-
+  parser.add_argument('--attack-type', type=str, default='autoattack', 
+                     choices=['autoattack', 'pgd', 'fgsm', 'genattack'], 
+                     help='type of attack to use during testing')
+  parser.add_argument('--pgd-steps', type=int, default=40,
+                     help='number of steps for PGD attack')
+  parser.add_argument('--pgd-alpha', type=float, default=0.01,
+                     help='step size for PGD attack')
   # archs
   parser.add_argument('--robustifier-arch', type=str, choices=['mnist', 'cifar10', 'tinyimagenet', 'identity', 'path'], default='mnist', help='robustifier architecture')
   parser.add_argument('--acquisition-arch', type=str, choices=['identity', 'camera'], default='identity', help='acquisition device architecture')
@@ -81,6 +87,267 @@ def parse_argumments():
 
   return args
 
+def fgsm_attack(model, x, y, epsilon, norm, device="cuda"):
+    """
+    Fast Gradient Sign Method
+    """
+    x.requires_grad = True
+    
+    # Forward pass
+    outputs = model(x)
+    loss = torch.nn.CrossEntropyLoss()(outputs, y)
+    
+    # Backward pass
+    loss.backward()
+    
+    # Create the perturbed image
+    if norm == np.inf:
+        perturbed_image = x + epsilon * x.grad.sign()
+    elif norm == 2.0:
+        grad_norm = torch.norm(x.grad.view(x.size(0), -1), p=2, dim=1).view(-1, 1, 1, 1)
+        scaled_grad = x.grad / (grad_norm + 1e-10)
+        perturbed_image = x + epsilon * scaled_grad
+    elif norm == 1.0:
+        grad_norm = torch.norm(x.grad.view(x.size(0), -1), p=1, dim=1).view(-1, 1, 1, 1)
+        scaled_grad = x.grad / (grad_norm + 1e-10)
+        perturbed_image = x + epsilon * scaled_grad
+    else:
+        raise NotImplementedError(f"Norm {norm} not implemented for FGSM")
+    
+    # Project back to valid range
+    perturbed_image = torch.clamp(perturbed_image, 0, 1)
+    
+    return perturbed_image.detach()
+
+
+# PGD attack implementation
+def pgd_attack(model, x, y, epsilon, alpha, num_steps, norm, device="cuda"):
+    """
+    Projected Gradient Descent Attack
+    """
+    # Create copy of the input
+    x_adv = x.clone().detach()
+    
+    # Random initialization within epsilon ball if using more than 1 step
+    if num_steps > 1:
+        if norm == np.inf:
+            x_adv = x_adv + torch.zeros_like(x_adv).uniform_(-epsilon, epsilon)
+        elif norm == 2.0:
+            delta = torch.zeros_like(x_adv).normal_()
+            d_flat = delta.view(delta.size(0), -1)
+            n = d_flat.norm(p=2, dim=1).view(-1, 1, 1, 1)
+            r = torch.zeros_like(n).uniform_(0, 1)
+            delta = delta * r * epsilon / (n + 1e-8)
+            x_adv = x_adv + delta
+        elif norm == 1.0:
+            # For L1 norm, random sparse perturbation
+            delta = torch.zeros_like(x_adv)
+            for i in range(x_adv.size(0)):
+                idx = torch.randint(0, x_adv[i].numel(), (1,)).item()
+                delta_flat = delta[i].view(-1)
+                delta_flat[idx] = torch.sign(torch.randn(1)).item() * epsilon
+                delta[i] = delta_flat.view_as(delta[i])
+            x_adv = x_adv + delta
+    
+    # Clamp to valid image range
+    x_adv = torch.clamp(x_adv, 0, 1)
+    
+    # PGD iterations
+    for _ in range(num_steps):
+        x_adv.requires_grad = True
+        
+        # Forward pass
+        outputs = model(x_adv)
+        loss = torch.nn.CrossEntropyLoss()(outputs, y)
+        
+        # Backward pass
+        loss.backward()
+        
+        # Gradient step
+        with torch.no_grad():
+            if norm == np.inf:
+                x_adv = x_adv + alpha * x_adv.grad.sign()
+            elif norm == 2.0:
+                grad_norm = torch.norm(x_adv.grad.view(x_adv.size(0), -1), p=2, dim=1).view(-1, 1, 1, 1)
+                scaled_grad = x_adv.grad / (grad_norm + 1e-10)
+                x_adv = x_adv + alpha * scaled_grad
+            elif norm == 1.0:
+                grad_flat = x_adv.grad.view(x_adv.size(0), -1)
+                abs_grad_flat = torch.abs(grad_flat)
+                # Get indices of max absolute gradient for each sample
+                _, indices = torch.max(abs_grad_flat, dim=1)
+                # Create sparse gradient with only the max component
+                sparse_grad = torch.zeros_like(grad_flat)
+                for i in range(x_adv.size(0)):
+                    sparse_grad[i, indices[i]] = torch.sign(grad_flat[i, indices[i]])
+                # Reshape back to image dimensions
+                sparse_grad = sparse_grad.view_as(x_adv)
+                x_adv = x_adv + alpha * sparse_grad
+            
+            # Project back to epsilon ball around original image
+            if norm == np.inf:
+                x_adv = torch.max(torch.min(x_adv, x + epsilon), x - epsilon)
+            elif norm == 2.0:
+                delta = x_adv - x
+                d_flat = delta.view(delta.size(0), -1)
+                n = d_flat.norm(p=2, dim=1).view(-1, 1, 1, 1)
+                mask = n > epsilon
+                d_flat = delta.view(delta.size(0), -1)
+                d_flat[mask.squeeze()] = d_flat[mask.squeeze()] * epsilon / n[mask]
+                delta = d_flat.view_as(delta)
+                x_adv = x + delta
+            elif norm == 1.0:
+                delta = x_adv - x
+                d_flat = delta.view(delta.size(0), -1)
+                n = d_flat.norm(p=1, dim=1).view(-1, 1, 1, 1)
+                mask = n > epsilon
+                if mask.any():
+                    # Project to L1 ball - approximation by scaling
+                    d_flat = delta.view(delta.size(0), -1)
+                    d_flat[mask.squeeze()] = d_flat[mask.squeeze()] * epsilon / n[mask]
+                    delta = d_flat.view_as(delta)
+                x_adv = x + delta
+                
+            # Clamp to valid image range
+            x_adv = torch.clamp(x_adv, 0, 1)
+    
+    return x_adv.detach()
+
+
+# GenAttack implementation (simplified version)
+class GenAttack:
+    def __init__(self, model, norm, eps, pop_size=6, mutation_rate=0.15, alpha=0.15, iterations=100):
+        self.model = model
+        self.norm = norm
+        self.eps = eps
+        self.pop_size = pop_size
+        self.mutation_rate = mutation_rate
+        self.alpha = alpha
+        self.iterations = iterations
+        
+    def attack(self, x, y, device="cuda"):
+        batch_size = x.size(0)
+        # Initialize population
+        population = [x.clone()]
+        for _ in range(self.pop_size - 1):
+            if self.norm == np.inf:
+                delta = torch.zeros_like(x).uniform_(-self.eps, self.eps)
+            elif self.norm == 2.0:
+                delta = torch.zeros_like(x).normal_()
+                d_flat = delta.view(delta.size(0), -1)
+                n = d_flat.norm(p=2, dim=1).view(-1, 1, 1, 1)
+                delta = delta * self.eps / (n + 1e-8)
+            elif self.norm == 1.0:
+                delta = torch.zeros_like(x)
+                d_flat = delta.view(delta.size(0), -1)
+                # Sparse perturbation for L1
+                idx = torch.randint(0, d_flat.size(1), (batch_size, int(d_flat.size(1) * 0.01)))
+                for i in range(batch_size):
+                    d_flat[i, idx[i]] = torch.sign(torch.randn(idx.size(1))) * self.eps / idx.size(1)
+                delta = d_flat.view_as(x)
+            
+            perturbed = torch.clamp(x + delta, 0, 1)
+            population.append(perturbed)
+        
+        # Evolutionary optimization
+        for _ in range(self.iterations):
+            # Evaluate fitness
+            fitness = []
+            for p in population:
+                with torch.no_grad():
+                    outputs = self.model(p)
+                    # Negative CE loss as fitness (higher is better)
+                    loss = -torch.nn.functional.cross_entropy(outputs, y, reduction='none')
+                    fitness.append(loss)
+            
+            # Convert to tensor
+            fitness = torch.stack(fitness, dim=1)
+            
+            # Get best candidates per batch element
+            _, indices = torch.topk(fitness, k=2, dim=1)
+            
+            # Create new population
+            new_population = [population[0]]  # Keep original
+            
+            # Elite
+            elite = torch.zeros_like(x)
+            for i in range(batch_size):
+                elite[i] = population[indices[i, 0]][i]
+            new_population.append(elite)
+            
+            # Generate new members through crossover and mutation
+            for _ in range(self.pop_size - 2):
+                parent1 = torch.zeros_like(x)
+                parent2 = torch.zeros_like(x)
+                
+                for i in range(batch_size):
+                    parent1[i] = population[indices[i, 0]][i]  # Best parent
+                    parent2[i] = population[indices[i, 1]][i]  # Second best parent
+                
+                # Crossover
+                beta = torch.zeros_like(x).uniform_(0, 1)
+                child = beta * parent1 + (1 - beta) * parent2
+                
+                # Mutation
+                mask = torch.zeros_like(x).uniform_(0, 1) < self.mutation_rate
+                mutation = torch.zeros_like(x)
+                
+                if self.norm == np.inf:
+                    mutation[mask] = torch.zeros_like(mutation[mask]).uniform_(-self.alpha, self.alpha)
+                elif self.norm == 2.0:
+                    mutation = torch.zeros_like(x).normal_() * self.alpha
+                elif self.norm == 1.0:
+                    # Sparse mutation
+                    for i in range(batch_size):
+                        flat_mask = mask[i].flatten()
+                        if flat_mask.sum() > 0:
+                            idx = torch.where(flat_mask)[0]
+                            mutation_flat = mutation[i].flatten()
+                            mutation_flat[idx] = torch.sign(torch.randn(idx.size(0))) * self.alpha
+                            mutation[i] = mutation_flat.view_as(mutation[i])
+                
+                child = child + mutation
+                
+                # Project to epsilon neighborhood
+                delta = child - x
+                if self.norm == np.inf:
+                    delta = torch.clamp(delta, -self.eps, self.eps)
+                elif self.norm == 2.0:
+                    d_flat = delta.view(delta.size(0), -1)
+                    n = d_flat.norm(p=2, dim=1).view(-1, 1, 1, 1)
+                    mask = n > self.eps
+                    if mask.any():
+                        d_flat[mask.squeeze()] = d_flat[mask.squeeze()] * self.eps / n[mask]
+                    delta = d_flat.view_as(delta)
+                elif self.norm == 1.0:
+                    d_flat = delta.view(delta.size(0), -1)
+                    n = d_flat.norm(p=1, dim=1).view(-1, 1, 1, 1)
+                    mask = n > self.eps
+                    if mask.any():
+                        d_flat[mask.squeeze()] = d_flat[mask.squeeze()] * self.eps / n[mask]
+                    delta = d_flat.view_as(delta)
+                
+                child = torch.clamp(x + delta, 0, 1)
+                new_population.append(child)
+            
+            population = new_population
+        
+        # Return best adversarial example
+        with torch.no_grad():
+            fitness = []
+            for p in population:
+                outputs = self.model(p)
+                loss = -torch.nn.functional.cross_entropy(outputs, y, reduction='none')
+                fitness.append(loss)
+            
+            fitness = torch.stack(fitness, dim=1)
+            _, indices = torch.max(fitness, dim=1)
+            
+            best_adv = torch.zeros_like(x)
+            for i in range(batch_size):
+                best_adv[i] = population[indices[i]][i]
+            
+        return best_adv
 
 def compute_predictions_and_loss(classifier, normalized_x, normalized_x_min, normalized_x_max, normalized_x_epsilon, f, bound_type, y, num_classes, ce, attack_norm):
     # Quick compute for easy case
@@ -446,21 +713,36 @@ def main():
   ###################################################################################################
   # Test
 
-  if args.test and not(test_loader is None):
-
-        # Initialize auto-attack - this is always testing mitm attack
+ if args.test and not(test_loader is None):
+        # Initialize attack based on args.attack_type
         norm_map = {1.0: 'L1', 2.0: 'L2', np.inf: 'Linf'}
         attack_norm_str = norm_map.get(args.attack_norm, 'Linf')
 
         forward_pass = torch.nn.Sequential(normalize, classifier_ori.model)
-        adversary = AutoAttack(
-            forward_pass, 
-            norm=attack_norm_str, 
-            eps=args.x_epsilon_attack_testing, 
-            version='standard'
-        )
-
-        # z
+        
+        # Select attack based on args.attack_type
+        if args.attack_type == 'autoattack':
+            adversary = AutoAttack(
+                forward_pass, 
+                norm=attack_norm_str, 
+                eps=args.x_epsilon_attack_testing, 
+                version='standard'
+            )
+        elif args.attack_type == 'pgd':
+            # No need to initialize here, we'll use the function directly
+            pass
+        elif args.attack_type == 'fgsm':
+            # No need to initialize here, we'll use the function directly
+            pass
+        elif args.attack_type == 'genattack':
+            adversary = GenAttack(
+                forward_pass,
+                norm=args.attack_norm,
+                eps=args.x_epsilon_attack_testing,
+                iterations=50  # Reduce for faster testing
+            )
+        
+        # Rest of the initialization code...
         z = torch.zeros((test_num_samples, num_channels, height, width), dtype=torch.float32, requires_grad=False, device='cuda')
         if not (prototypes_loader is None):
             # Since the w_rob may have been shuffled... let's do this.
@@ -498,9 +780,9 @@ def main():
             normalized_x_epsilon_attack = x_epsilon_attack / std
             
             # Log file for comprehensive testing results
-            test_log_path = os.path.join(logger.eval_dir, 'comprehensive_test_eval.txt')
+            test_log_path = os.path.join(logger.eval_dir, f'comprehensive_test_eval_{args.attack_type}.txt')
             with open(test_log_path, 'w') as test_log:
-                test_log.write("Comprehensive Testing Results\n")
+                test_log.write(f"Comprehensive Testing Results with {args.attack_type.upper()}\n")
                 test_log.write("=" * 50 + "\n\n")
 
                 # Multiple test multiplier runs
@@ -546,11 +828,36 @@ def main():
                         x_rob = (normalized_x_rob * std.view(1, -1, 1, 1)) + avg.view(1, -1, 1, 1)
                         psnr_x = 20.0 * torch.log10(1.0 / torch.sqrt((((x_rob - x) * std.view(1, -1, 1, 1)) ** 2.0 + 1e-12).mean()))
 
-                        # AutoAttack (adversarial attack testing)
+                        # Apply appropriate attack based on selection
                         if args.no_autoattack:
                             adv_err = np.nan
                         else:
-                            x_adv = adversary.run_standard_evaluation(x_rob, y, bs=args.batch_size)
+                            if args.attack_type == 'autoattack':
+                                x_adv = adversary.run_standard_evaluation(x_rob, y, bs=args.batch_size)
+                            elif args.attack_type == 'pgd':
+                                with torch.enable_grad():
+                                    x_adv = pgd_attack(
+                                        forward_pass, 
+                                        x_rob, 
+                                        y, 
+                                        epsilon=args.x_epsilon_attack_testing,
+                                        alpha=args.pgd_alpha,
+                                        num_steps=args.pgd_steps,
+                                        norm=args.attack_norm
+                                    )
+                            elif args.attack_type == 'fgsm':
+                                with torch.enable_grad():
+                                    x_adv = fgsm_attack(
+                                        forward_pass,
+                                        x_rob,
+                                        y,
+                                        epsilon=args.x_epsilon_attack_testing,
+                                        norm=args.attack_norm
+                                    )
+                            elif args.attack_type == 'genattack':
+                                x_adv = adversary.attack(x_rob, y)
+                            
+                            # Evaluate adversarial examples
                             adv_prediction = classifier_ori(normalize(x_adv))
                             adv_err = torch.sum(torch.argmax(adv_prediction, dim=1) != y).cpu().detach().numpy() / y.size(0)
 
