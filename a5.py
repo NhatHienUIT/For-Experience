@@ -529,19 +529,7 @@ def main():
           idxs = idxs.cuda()
           vprint("Loaded batch data w. Memory [allocated %.3fGb [max %.3fGb] reserved %.3fGb [max %.3fGb]." % (torch.cuda.memory_allocated() / (1024 ** 3), torch.cuda.max_memory_allocated() / (1024 ** 3), torch.cuda.memory_reserved() / (1024 ** 3), torch.cuda.max_memory_reserved() / (1024 ** 3)), args.verbose)
 
-          # robustify w (proptotyes P, also used for A5/O)
-          w_rob = zx2x_rob(z=torch.gather(z, 0, idxs.view(-1, 1, 1, 1).expand(args.batch_size, num_channels, height, width)), x=w, x_epsilon= torch.tensor([args.w_epsilon_defense]).float().cuda(), xD_min=torch.tensor([0.0]).float().cuda(), xD_max=torch.tensor([1.0]).float().cuda())
-          vprint("Robustified batch data w. Memory [allocated %.3fGb [max %.3fGb] reserved %.3fGb [max %.3fGb]." % (torch.cuda.memory_allocated() / (1024 ** 3), torch.cuda.max_memory_allocated() / (1024 ** 3), torch.cuda.memory_reserved() / (1024 ** 3), torch.cuda.max_memory_reserved() / (1024 ** 3)), args.verbose)
-
-          # camera acquisition x = A(w), also include normalization
-          x = augmentation(acquisition(w_rob, tr1, tr2))
-          normalized_x = normalize(x)
-          vprint("Augmented batch data w. Memory [allocated %.3fGb [max %.3fGb] reserved %.3fGb [max %.3fGb]." % (torch.cuda.memory_allocated() / (1024 ** 3), torch.cuda.max_memory_allocated() / (1024 ** 3), torch.cuda.memory_reserved() / (1024 ** 3), torch.cuda.max_memory_reserved() / (1024 ** 3)), args.verbose)
-
-          # robustify x (robustifier R)
-          normalized_x_rob = robustifier(normalized_x)
-          vprint("Robustified batch data x. Memory [allocated %.3fGb [max %.3fGb] reserved %.3fGb [max %.3fGb]." % (torch.cuda.memory_allocated() / (1024 ** 3), torch.cuda.max_memory_allocated() / (1024 ** 3), torch.cuda.memory_reserved() / (1024 ** 3), torch.cuda.max_memory_reserved() / (1024 ** 3)), args.verbose)
-
+          # Setup Multi-Norm parameters
           x_epsilon_attack_base = x_epsilon_attack_scheduler.get_eps()
           f = (x_epsilon_attack_scheduler.get_max_eps() - x_epsilon_attack_base) / np.max((x_epsilon_attack_scheduler.get_max_eps(), 1e-12))
 
@@ -551,6 +539,47 @@ def main():
           batch_reg_ce, batch_ver_ce, batch_loss = 0, 0, 0
 
           for current_norm in active_norms:
+              
+              # --- MOVED INSIDE THE LOOP ---
+              # We rebuild the computational graph for each norm so PyTorch can safely call .backward() multiple times
+              w_rob = zx2x_rob(z=torch.gather(z, 0, idxs.view(-1, 1, 1, 1).expand(args.batch_size, num_channels, height, width)), x=w, x_epsilon= torch.tensor([args.w_epsilon_defense]).float().cuda(), xD_min=torch.tensor([0.0]).float().cuda(), xD_max=torch.tensor([1.0]).float().cuda())
+              x = augmentation(acquisition(w_rob, tr1, tr2))
+              normalized_x = normalize(x)
+              normalized_x_rob = robustifier(normalized_x)
+              # -----------------------------
+
+              # Scale epsilon based on the norm
+              if current_norm == np.inf:
+                  x_epsilon_attack = x_epsilon_attack_base
+              elif current_norm == 2.0:
+                  x_epsilon_attack = x_epsilon_attack_base * args.l2_eps_multiplier
+              elif current_norm == 1.0:
+                  x_epsilon_attack = x_epsilon_attack_base * args.l1_eps_multiplier
+
+              normalized_x_epsilon_attack = x_epsilon_attack / std
+
+              (prediction, reg_ce, reg_err, ver_ce, ver_err, loss) = compute_predictions_and_loss(
+                  classifier=classifier,
+                  normalized_x=normalized_x_rob,
+                  normalized_x_min=normalized_x_min,
+                  normalized_x_max=normalized_x_max,
+                  normalized_x_epsilon=normalized_x_epsilon_attack,
+                  f=f,
+                  bound_type=args.bound_type,
+                  y=y,
+                  num_classes=num.numpy()[0],
+                  ce=ce,
+                  attack_norm=current_norm
+              )
+
+              # Weight the loss and accumulate gradients
+              weighted_loss = loss * norm_weight
+              weighted_loss.backward()
+
+              # Track metrics for logging
+              batch_reg_ce += reg_ce.item() * norm_weight
+              batch_ver_ce += ver_ce.item() * norm_weight
+              batch_loss += loss.item() * norm_weight
               if current_norm == np.inf:
                   x_epsilon_attack = x_epsilon_attack_base
               elif current_norm == 2.0:
