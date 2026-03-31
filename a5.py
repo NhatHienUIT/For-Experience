@@ -736,215 +736,176 @@ def main():
   # Test
 
   if args.test and not(test_loader is None):
-        # Initialize attack based on args.attack_type
-        norm_map = {1.0: 'L1', 2.0: 'L2', np.inf: 'Linf'}
-        attack_norm_str = norm_map.get(args.attack_norm, 'Linf')
-
         forward_pass = torch.nn.Sequential(normalize, classifier_ori.model)
         
-        # Select attack based on args.attack_type
-        if args.attack_type == 'autoattack':
-            adversary = AutoAttack(
-                forward_pass, 
-                norm=attack_norm_str, 
-                eps=args.x_epsilon_attack_testing, 
-                version='standard'
-            )
-        elif args.attack_type == 'pgd':
-            # No need to initialize here, we'll use the function directly
-            pass
-        elif args.attack_type == 'fgsm':
-            # No need to initialize here, we'll use the function directly
-            pass
-        elif args.attack_type == 'genattack':
-            adversary = GenAttack(
-                forward_pass,
-                norm=args.attack_norm,
-                eps=args.x_epsilon_attack_testing,
-                iterations=50  # Reduce for faster testing
-            )
-        
-        # Rest of the initialization code...
-        z = torch.zeros((test_num_samples, num_channels, height, width), dtype=torch.float32, requires_grad=False, device='cuda')
-        if not (prototypes_loader is None):
-            # Since the w_rob may have been shuffled... let's do this.
-            # First I load all the ws in z...
-            for (i, (w, y, idxs)) in enumerate(test_loader):
-                for n in range(w.size(0)):
-                    idx = idxs[n]
-                    z[idx] = w[n]
-            # Then I load the robustified w
-            w_robs = z.clone()
-            for (i, (w_rob, y, idxs)) in enumerate(prototypes_loader):
-                for n in range(w_rob.size(0)):
-                    idx = idxs[n]
-                    w_robs[idx] = w_rob[n]
-            z = xx_rob2z(z, w_robs, args.w_epsilon_defense)
-            del w_rob
-        f = 0.0
+        # Determine which norms to test
+        active_norms = [np.inf, 2.0, 1.0] if args.multi_norm_training else [args.attack_norm]
+        norm_map = {1.0: 'L1', 2.0: 'L2', np.inf: 'Linf'}
 
-        # Detailed tracking of results
-        detailed_results = {
-            'batches': [],
-            'summary': {
-                'total_samples': 0,
-                'total_reg_err': 0,
-                'total_ver_err': 0,
-                'total_adv_err': 0,
-                'total_psnr_w': 0,
-                'total_psnr_x': 0
-            }
-        }
+        # We will loop through each norm and run a full evaluation
+        for current_norm in active_norms:
+            attack_norm_str = norm_map.get(current_norm, 'Linf')
+            print(f"\n{'='*60}")
+            print(f"STARTING COMPREHENSIVE EVALUATION FOR NORM: {attack_norm_str}")
+            print(f"{'='*60}\n")
 
-        meter = MultiAverageMeter()
-        with torch.no_grad():
-            x_epsilon_attack = args.x_epsilon_attack_testing
+            # Scale testing epsilon based on the current norm being evaluated
+            if current_norm == np.inf:
+                x_epsilon_attack = args.x_epsilon_attack_testing
+            elif current_norm == 2.0:
+                x_epsilon_attack = args.x_epsilon_attack_testing * args.l2_eps_multiplier
+            elif current_norm == 1.0:
+                x_epsilon_attack = args.x_epsilon_attack_testing * args.l1_eps_multiplier
+
             normalized_x_epsilon_attack = x_epsilon_attack / std
-            
-            # Log file for comprehensive testing results
-            test_log_path = os.path.join(logger.eval_dir, f'comprehensive_test_eval_{args.attack_type}.txt')
-            with open(test_log_path, 'w') as test_log:
-                test_log.write(f"Comprehensive Testing Results with {args.attack_type.upper()}\n")
-                test_log.write("=" * 50 + "\n\n")
 
-                # Multiple test multiplier runs
-                for j in range(args.test_multiplier):
-                    test_log.write(f"Test Multiplier Run {j+1}\n")
-                    test_log.write("-" * 30 + "\n")
+            # Initialize attack for the specific norm
+            if args.attack_type == 'autoattack':
+                adversary = AutoAttack(
+                    forward_pass, 
+                    norm=attack_norm_str, 
+                    eps=x_epsilon_attack, 
+                    version='standard'
+                )
+            elif args.attack_type == 'genattack':
+                adversary = GenAttack(
+                    forward_pass,
+                    norm=current_norm,
+                    eps=x_epsilon_attack,
+                    iterations=50
+                )
+        
+            # Prepare z vectors for the test set
+            z = torch.zeros((test_num_samples, num_channels, height, width), dtype=torch.float32, requires_grad=False, device='cuda')
+            if not (prototypes_loader is None):
+                for (i, (w, y, idxs)) in enumerate(test_loader):
+                    for n in range(w.size(0)):
+                        idx = idxs[n]
+                        z[idx] = w[n]
+                w_robs = z.clone()
+                for (i, (w_rob, y, idxs)) in enumerate(prototypes_loader):
+                    for n in range(w_rob.size(0)):
+                        idx = idxs[n]
+                        w_robs[idx] = w_rob[n]
+                z = xx_rob2z(z, w_robs, args.w_epsilon_defense)
+                del w_rob
+            f = 0.0
 
-                    # Iterate through test loader
-                    for (i, (w, y, idxs)) in enumerate(test_loader):
-                        w = w.cuda()
-                        y = y.cuda()
-                        idxs = idxs.cuda()
+            detailed_results = {
+                'norm': attack_norm_str,
+                'epsilon': x_epsilon_attack,
+                'batches': [],
+                'summary': {
+                    'total_samples': 0, 'total_reg_err': 0, 'total_ver_err': 0,
+                    'total_adv_err': 0, 'total_psnr_w': 0, 'total_psnr_x': 0
+                }
+            }
 
-                        # Be sure to use the same dataset in training and testing
-                        w_rob = zx2x_rob(
-                            z=torch.gather(z, 0, idxs.view(-1, 1, 1, 1).expand(args.batch_size, num_channels, height, width)), 
-                            x=w, 
-                            x_epsilon=torch.tensor([args.w_epsilon_defense]).float().cuda(), 
-                            xD_min=torch.tensor([0.0]).float().cuda(), 
-                            xD_max=torch.tensor([1.0]).float().cuda()
-                        )
-                        x = acquisition(w_rob, tr1, tr2)
-                        normalized_x = normalize(x)
-                        normalized_x_rob = robustifier(normalized_x)
-                        
-                        # Compute predictions and losses
-                        (prediction, reg_ce, reg_err, ver_ce, ver_err, loss) = compute_predictions_and_loss(
-                            classifier=classifier,
-                            normalized_x=normalized_x_rob,
-                            normalized_x_min=normalized_x_min,
-                            normalized_x_max=normalized_x_max,
-                            normalized_x_epsilon=normalized_x_epsilon_attack,
-                            f=f,
-                            bound_type=args.bound_type,
-                            y=y,
-                            num_classes=num.numpy()[0],
-                            ce=ce,
-                            attack_norm=attack_norm
-                        )
+            meter = MultiAverageMeter()
+            with torch.no_grad():
+                
+                test_log_path = os.path.join(logger.eval_dir, f'test_eval_{args.attack_type}_{attack_norm_str}.txt')
+                with open(test_log_path, 'w') as test_log:
+                    test_log.write(f"Testing Results: Attack={args.attack_type.upper()}, Norm={attack_norm_str}, Eps={x_epsilon_attack}\n")
+                    test_log.write("=" * 60 + "\n\n")
 
-                        # Compute PSNR metrics
-                        psnr_w = 20.0 * torch.log10(1.0 / torch.sqrt(((w_rob - w) ** 2.0 + 1e-12).mean()))
-                        x_rob = (normalized_x_rob * std.view(1, -1, 1, 1)) + avg.view(1, -1, 1, 1)
-                        psnr_x = 20.0 * torch.log10(1.0 / torch.sqrt((((x_rob - x) * std.view(1, -1, 1, 1)) ** 2.0 + 1e-12).mean()))
+                    for j in range(args.test_multiplier):
+                        test_log.write(f"Test Multiplier Run {j+1}\n")
+                        test_log.write("-" * 30 + "\n")
 
-                        # Apply appropriate attack based on selection
-                        if args.no_autoattack:
-                            adv_err = np.nan
-                        else:
-                            if args.attack_type == 'autoattack':
-                                x_adv = adversary.run_standard_evaluation(x_rob, y, bs=args.batch_size)
-                            elif args.attack_type == 'pgd':
-                                with torch.enable_grad():
-                                    x_adv = pgd_attack(
-                                        forward_pass, 
-                                        x_rob, 
-                                        y, 
-                                        epsilon=args.x_epsilon_attack_testing,
-                                        alpha=args.pgd_alpha,
-                                        num_steps=args.pgd_steps,
-                                        norm=args.attack_norm
-                                    )
-                            elif args.attack_type == 'fgsm':
-                                with torch.enable_grad():
-                                    x_adv = fgsm_attack(
-                                        forward_pass,
-                                        x_rob,
-                                        y,
-                                        epsilon=args.x_epsilon_attack_testing,
-                                        norm=args.attack_norm
-                                    )
-                            elif args.attack_type == 'genattack':
-                                x_adv = adversary.attack(x_rob, y)
+                        for (i, (w, y, idxs)) in enumerate(test_loader):
+                            w = w.cuda()
+                            y = y.cuda()
+                            idxs = idxs.cuda()
+
+                            w_rob = zx2x_rob(
+                                z=torch.gather(z, 0, idxs.view(-1, 1, 1, 1).expand(args.batch_size, num_channels, height, width)), 
+                                x=w, 
+                                x_epsilon=torch.tensor([args.w_epsilon_defense]).float().cuda(), 
+                                xD_min=torch.tensor([0.0]).float().cuda(), 
+                                xD_max=torch.tensor([1.0]).float().cuda()
+                            )
+                            x = acquisition(w_rob, tr1, tr2)
+                            normalized_x = normalize(x)
+                            normalized_x_rob = robustifier(normalized_x)
                             
-                            # Evaluate adversarial examples
-                            adv_prediction = classifier_ori(normalize(x_adv))
-                            adv_err = torch.sum(torch.argmax(adv_prediction, dim=1) != y).cpu().detach().numpy() / y.size(0)
+                            (prediction, reg_ce, reg_err, ver_ce, ver_err, loss) = compute_predictions_and_loss(
+                                classifier=classifier,
+                                normalized_x=normalized_x_rob,
+                                normalized_x_min=normalized_x_min,
+                                normalized_x_max=normalized_x_max,
+                                normalized_x_epsilon=normalized_x_epsilon_attack,
+                                f=f,
+                                bound_type=args.bound_type,
+                                y=y,
+                                num_classes=num.numpy()[0],
+                                ce=ce,
+                                attack_norm=current_norm
+                            )
 
-                        # Detailed batch results
-                        batch_result = {
-                            'batch_index': i,
-                            'reg_ce': reg_ce.item(),
-                            'reg_err': reg_err,
-                            'ver_ce': ver_ce.item(),
-                            'ver_err': ver_err,
-                            'loss': loss.item(),
-                            'psnr_w': psnr_w.item(),
-                            'psnr_x': psnr_x.item(),
-                            'adv_err': adv_err
-                        }
-                        detailed_results['batches'].append(batch_result)
+                            psnr_w = 20.0 * torch.log10(1.0 / torch.sqrt(((w_rob - w) ** 2.0 + 1e-12).mean()))
+                            x_rob = (normalized_x_rob * std.view(1, -1, 1, 1)) + avg.view(1, -1, 1, 1)
+                            psnr_x = 20.0 * torch.log10(1.0 / torch.sqrt((((x_rob - x) * std.view(1, -1, 1, 1)) ** 2.0 + 1e-12).mean()))
 
-                        # Update summary statistics
-                        detailed_results['summary']['total_samples'] += y.size(0)
-                        detailed_results['summary']['total_reg_err'] += reg_err * y.size(0)
-                        detailed_results['summary']['total_ver_err'] += ver_err * y.size(0)
-                        detailed_results['summary']['total_adv_err'] += adv_err * y.size(0)
-                        detailed_results['summary']['total_psnr_w'] += psnr_w.item() * y.size(0)
-                        detailed_results['summary']['total_psnr_x'] += psnr_x.item() * y.size(0)
+                            if args.no_autoattack:
+                                adv_err = np.nan
+                            else:
+                                if args.attack_type == 'autoattack':
+                                    x_adv = adversary.run_standard_evaluation(x_rob, y, bs=args.batch_size)
+                                elif args.attack_type == 'pgd':
+                                    with torch.enable_grad():
+                                        x_adv = pgd_attack(forward_pass, x_rob, y, epsilon=x_epsilon_attack, alpha=args.pgd_alpha, num_steps=args.pgd_steps, norm=current_norm)
+                                elif args.attack_type == 'fgsm':
+                                    with torch.enable_grad():
+                                        x_adv = fgsm_attack(forward_pass, x_rob, y, epsilon=x_epsilon_attack, norm=current_norm)
+                                elif args.attack_type == 'genattack':
+                                    x_adv = adversary.attack(x_rob, y)
+                                
+                                adv_prediction = classifier_ori(normalize(x_adv))
+                                adv_err = torch.sum(torch.argmax(adv_prediction, dim=1) != y).cpu().detach().numpy() / y.size(0)
 
-                        # Log batch results
-                        batch_log_str = (
-                            f"Batch {i}: "
-                            f"Reg Err: {reg_err*100:.2f}% | "
-                            f"Ver Err: {ver_err*100:.2f}% | "
-                            f"Adv Err: {adv_err*100:.2f}% | "
-                            f"PSNR(w): {psnr_w:.2f}dB | "
-                            f"PSNR(x): {psnr_x:.2f}dB | "
-                            f"Loss: {loss.item():.4f}"
-                        )
-                        print(batch_log_str)
-                        test_log.write(batch_log_str + "\n")
+                            batch_result = {
+                                'batch_index': i, 'reg_ce': reg_ce.item(), 'reg_err': reg_err,
+                                'ver_ce': ver_ce.item(), 'ver_err': ver_err, 'loss': loss.item(),
+                                'psnr_w': psnr_w.item(), 'psnr_x': psnr_x.item(), 'adv_err': adv_err
+                            }
+                            detailed_results['batches'].append(batch_result)
 
-                    # Compute final averages
+                            detailed_results['summary']['total_samples'] += y.size(0)
+                            detailed_results['summary']['total_reg_err'] += reg_err * y.size(0)
+                            detailed_results['summary']['total_ver_err'] += ver_err * y.size(0)
+                            detailed_results['summary']['total_adv_err'] += adv_err * y.size(0)
+                            detailed_results['summary']['total_psnr_w'] += psnr_w.item() * y.size(0)
+                            detailed_results['summary']['total_psnr_x'] += psnr_x.item() * y.size(0)
+
+                            batch_log_str = (
+                                f"Batch {i}: "
+                                f"Reg Err: {reg_err*100:.2f}% | "
+                                f"Ver Err: {ver_err*100:.2f}% | "
+                                f"Adv Err: {adv_err*100:.2f}% | "
+                                f"Loss: {loss.item():.4f}"
+                            )
+                            print(batch_log_str)
+                            test_log.write(batch_log_str + "\n")
+
                     summary = detailed_results['summary']
                     avg_reg_err = summary['total_reg_err'] / summary['total_samples'] * 100
                     avg_ver_err = summary['total_ver_err'] / summary['total_samples'] * 100
                     avg_adv_err = summary['total_adv_err'] / summary['total_samples'] * 100
-                    avg_psnr_w = summary['total_psnr_w'] / summary['total_samples']
-                    avg_psnr_x = summary['total_psnr_x'] / summary['total_samples']
 
-                    # Log summary
                     summary_log_str = (
-                        f"\nTest Multiplier Run {j+1} Summary:\n"
-                        f"Total Samples: {summary['total_samples']}\n"
+                        f"\n--- {attack_norm_str} FINAL SUMMARY ---\n"
+                        f"Epsilon Used: {x_epsilon_attack}\n"
                         f"Average Regular Error: {avg_reg_err:.2f}%\n"
                         f"Average Verifiable Error: {avg_ver_err:.2f}%\n"
                         f"Average Adversarial Error: {avg_adv_err:.2f}%\n"
-                        f"Average PSNR(w): {avg_psnr_w:.2f}dB\n"
-                        f"Average PSNR(x): {avg_psnr_x:.2f}dB\n"
                     )
                     print(summary_log_str)
                     test_log.write(summary_log_str + "\n\n")
 
-                # Save detailed results as JSON for further analysis
                 import json
-                with open(os.path.join(logger.eval_dir, 'detailed_test_results.json'), 'w') as f:
+                with open(os.path.join(logger.eval_dir, f'detailed_test_results_{attack_norm_str}.json'), 'w') as f:
                     json.dump(detailed_results, f, indent=2)
-
-        print(f"Comprehensive test results saved to {test_log_path}")
 
   return 0
 
