@@ -42,7 +42,9 @@ def parse_argumments():
   parser.add_argument('--validation-dataset-folder', type=str, default=None, help='validation dataset folder (default: None)')
   parser.add_argument('--test-dataset-folder', type=str, default=None, help='testing dataset folder (default: None)')
   parser.add_argument('--prototypes-dataset-folder', type=str, default=None, help='dataset with trained prototypes (default: None)')
-
+  parser.add_argument('--multi-norm-training', action='store_true', help='Train against L1, L2, and Linf simultaneously')
+  parser.add_argument('--l2-eps-multiplier', type=float, default=10.0, help='Multiplier for L2 epsilon relative to Linf')
+  parser.add_argument('--l1-eps-multiplier', type=float, default=100.0, help='Multiplier for L1 epsilon relative to Linf')
   # training params
   parser.add_argument('--batch-size', type=int, default=100, help='batch size (default 100)')
   parser.add_argument('--epochs', type=int, default=100, help='training epochs (default 100)')
@@ -540,44 +542,64 @@ def main():
           normalized_x_rob = robustifier(normalized_x)
           vprint("Robustified batch data x. Memory [allocated %.3fGb [max %.3fGb] reserved %.3fGb [max %.3fGb]." % (torch.cuda.memory_allocated() / (1024 ** 3), torch.cuda.max_memory_allocated() / (1024 ** 3), torch.cuda.memory_reserved() / (1024 ** 3), torch.cuda.max_memory_reserved() / (1024 ** 3)), args.verbose)
 
-          # predictions (classifier C) and loss computation
-          x_epsilon_attack = x_epsilon_attack_scheduler.get_eps()  # get the current value of the attacking epsilon
-          normalized_x_epsilon_attack = x_epsilon_attack / std  # Notice this can be a vector, not just a scalar
-          f = (x_epsilon_attack_scheduler.get_max_eps() - x_epsilon_attack) / np.max((x_epsilon_attack_scheduler.get_max_eps(), 1e-12))  # this factor is used to mix the regular and worst case entropy in the loss
-          (prediction, reg_ce, reg_err, ver_ce, ver_err, loss) = compute_predictions_and_loss(classifier=classifier,
-                                                                                              normalized_x=normalized_x_rob,
-                                                                                              normalized_x_min=normalized_x_min,
-                                                                                              normalized_x_max=normalized_x_max,
-                                                                                              normalized_x_epsilon=normalized_x_epsilon_attack,
-                                                                                              f=f,
-                                                                                              bound_type=args.bound_type,
-                                                                                              y=y,
-                                                                                              num_classes=num.numpy()[0],
-                                                                                              ce=ce,
-                                                                                              attack_norm=attack_norm)
+          x_epsilon_attack_base = x_epsilon_attack_scheduler.get_eps()
+          f = (x_epsilon_attack_scheduler.get_max_eps() - x_epsilon_attack_base) / np.max((x_epsilon_attack_scheduler.get_max_eps(), 1e-12))
+
+          active_norms = [np.inf, 2.0, 1.0] if args.multi_norm_training else [args.attack_norm]
+          norm_weight = 1.0 / len(active_norms) 
+
+          batch_reg_ce, batch_ver_ce, batch_loss = 0, 0, 0
+
+          for current_norm in active_norms:
+              if current_norm == np.inf:
+                  x_epsilon_attack = x_epsilon_attack_base
+              elif current_norm == 2.0:
+                  x_epsilon_attack = x_epsilon_attack_base * args.l2_eps_multiplier
+              elif current_norm == 1.0:
+                  x_epsilon_attack = x_epsilon_attack_base * args.l1_eps_multiplier
+
+              normalized_x_epsilon_attack = x_epsilon_attack / std
+
+              (prediction, reg_ce, reg_err, ver_ce, ver_err, loss) = compute_predictions_and_loss(
+                  classifier=classifier,
+                  normalized_x=normalized_x_rob,
+                  normalized_x_min=normalized_x_min,
+                  normalized_x_max=normalized_x_max,
+                  normalized_x_epsilon=normalized_x_epsilon_attack,
+                  f=f,
+                  bound_type=args.bound_type,
+                  y=y,
+                  num_classes=num.numpy()[0],
+                  ce=ce,
+                  attack_norm=current_norm
+              )
+
+              weighted_loss = loss * norm_weight
+              weighted_loss.backward()
+
+              batch_reg_ce += reg_ce.item() * norm_weight
+              batch_ver_ce += ver_ce.item() * norm_weight
+              batch_loss += loss.item() * norm_weight
+
           vprint("Classified batch data x and computed loss. Memory [allocated %.3fGb [max %.3fGb] reserved %.3fGb [max %.3fGb]." % (torch.cuda.memory_allocated() / (1024 ** 3), torch.cuda.max_memory_allocated() / (1024 ** 3), torch.cuda.memory_reserved() / (1024 ** 3), torch.cuda.max_memory_reserved() / (1024 ** 3)), args.verbose)
 
-          # loss backward and step
-          loss.backward()
-          vprint("Backward done. Memory [allocated %.3fGb [max %.3fGb] reserved %.3fGb [max %.3fGb]." % (torch.cuda.memory_allocated() / (1024 **3), torch.cuda.max_memory_allocated() / (1024 **3), torch.cuda.memory_reserved() / (1024 **3), torch.cuda.max_memory_reserved() / (1024 **3)), args.verbose)
           batch_multiplier_index += 1
           if np.mod(batch_multiplier_index, batch_multiplier) == 0:
             opt.step()
             opt.zero_grad()
             batch_multiplier_index = 0
           vprint("Step done. Memory [allocated %.3fGb [max %.3fGb] reserved %.3fGb [max %.3fGb]." % (torch.cuda.memory_allocated() / (1024 **3), torch.cuda.max_memory_allocated() / (1024 **3), torch.cuda.memory_reserved() / (1024 **3), torch.cuda.max_memory_reserved() / (1024 **3)), args.verbose)
-
+          # step info
           # step info
           with torch.no_grad():
             psnr_w = 20.0 * torch.log10(1.0 / torch.sqrt(((w_rob - w) ** 2.0 + 1e-12).mean()))
             x_rob = (normalized_x_rob * std.view(1, -1, 1, 1)) + avg.view(1, -1, 1, 1)
             psnr_x = 20.0 * torch.log10(1.0 / torch.sqrt((((x_rob - x) * std.view(1, -1, 1, 1))**2.0 + 1e-12).mean()))
 
-            # tensorboard log
-            writer.add_scalars('Loss', {'reg ce [training]': reg_ce, 'ver ce [training]': ver_ce, 'loss [training]': loss}, global_step=global_step)
+            writer.add_scalars('Loss', {'reg ce [training]': batch_reg_ce, 'ver ce [training]': batch_ver_ce, 'loss [training]': batch_loss}, global_step=global_step)
             writer.add_scalars('Loss - f', {'f': f}, global_step=global_step)
             writer.add_scalars('Error', {'reg [training]': reg_err, 'ver [training]': ver_err}, global_step=global_step)
-            writer.add_scalars('Epsilon x', {'[training]': x_epsilon_attack, '[testing]': args.x_epsilon_attack_testing}, global_step=global_step)
+            writer.add_scalars('Epsilon x', {'[training]': x_epsilon_attack_base, '[testing]': args.x_epsilon_attack_testing}, global_step=global_step)
             writer.add_scalars('PSNR', {'w [training]': psnr_w, 'x [training]': psnr_x}, global_step=global_step)
 
             if np.mod(i, 10) == 0:
