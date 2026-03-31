@@ -598,7 +598,7 @@ def main():
       if not (validation_loader is None):
         meter = MultiAverageMeter()
         with torch.no_grad():
-          epsilon_x_attack = args.x_epsilon_attack_testing
+          epsilon_x_attack = x_epsilon_attack_scheduler.get_eps()
           normalized_x_epsilon_attack = epsilon_x_attack / std
           for (i, (w, y, idxs)) in enumerate(validation_loader):
             w = w.cuda()
