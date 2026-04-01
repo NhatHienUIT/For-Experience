@@ -662,7 +662,8 @@ def main():
         ff.close()
 
         # tensorboard log (validation and lr)
-        writer.add_scalars('Loss', {'reg ce [validation]': meter.avg('reg_ce'), 'ver ce [validation]': meter.avg('ver_ce'), 'loss [validation]': meter.avg('loss')}, global_step=global_step)
+        # tensorboard log
+            writer.add_scalars('Loss', {'reg ce [training]': reg_ce, 'ver ce [training]': ver_ce, 'loss [training]': loss}, global_step=global_step)
         writer.add_scalars('Error', {'reg [validation]': meter.avg('reg_err'), 'ver [validation]': meter.avg('ver_err')}, global_step=global_step)
         writer.add_scalars('PSNR', {'w [validation]': meter.avg('psnr_w'), 'x [validation]': meter.avg('psnr_x')}, global_step=global_step)
         writer.add_scalars('LR', {'lr': lr_scheduler.get_last_lr()[0]}, global_step=global_step)
