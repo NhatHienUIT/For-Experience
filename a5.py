@@ -587,7 +587,8 @@ def main():
             x_rob = (normalized_x_rob * std.view(1, -1, 1, 1)) + avg.view(1, -1, 1, 1)
             psnr_x = 20.0 * torch.log10(1.0 / torch.sqrt((((x_rob - x) * std.view(1, -1, 1, 1))**2.0 + 1e-12).mean()))
 
-            writer.add_scalars('Loss', {'reg ce [training]': batch_reg_ce, 'ver ce [training]': batch_ver_ce, 'loss [training]': batch_loss}, global_step=global_step)
+            # tensorboard log
+            writer.add_scalars('Loss', {'reg ce [training]': reg_ce, 'ver ce [training]': ver_ce, 'loss [training]': loss}, global_step=global_step)
             writer.add_scalars('Loss - f', {'f': f}, global_step=global_step)
             writer.add_scalars('Error', {'reg [training]': reg_err, 'ver [training]': ver_err}, global_step=global_step)
             writer.add_scalars('Epsilon x', {'[training]': x_epsilon_attack_base, '[testing]': args.x_epsilon_attack_testing}, global_step=global_step)
