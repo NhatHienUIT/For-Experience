@@ -363,9 +363,11 @@ def compute_predictions_and_loss(classifier, normalized_x, normalized_x_min, nor
     return (prediction, reg_ce, reg_err, ver_ce, ver_err, loss)
 
   # prediction: lower and upper bounds (auto_LiRPA) - also use the linear comb in the last layer
+  scalar_eps = normalized_x_epsilon.max() if isinstance(normalized_x_epsilon, torch.Tensor) else normalized_x_epsilon
+  
   ptb = PerturbationLpNorm(
-        norm=attack_norm,  # Dynamic norm selection
-        eps=normalized_x_epsilon, 
+        norm=attack_norm,  
+        eps=scalar_eps, 
         x_L=torch.max(normalized_x - normalized_x_epsilon.view(1, -1, 1, 1), normalized_x_min.view(1, -1, 1, 1)), 
         x_U=torch.min(normalized_x + normalized_x_epsilon.view(1, -1, 1, 1), normalized_x_max.view(1, -1, 1, 1))
     )
