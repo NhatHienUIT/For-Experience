@@ -514,7 +514,15 @@ def main():
     global_step = 0
     best_ver_err = 1.0
     x_epsilon_attack_scheduler.train()
+    if not args.train_classifier:
+        classifier.eval()
+    else:
+        classifier.train()
 
+    if not args.train_robustifier:
+        robustifier.eval()
+    else:
+        robustifier.train()
     batch_multiplier = args.batch_multiplier
     batch_multiplier_index = 0
 
@@ -614,6 +622,10 @@ def main():
       # validation
       if not (validation_loader is None):
         meter = MultiAverageMeter()
+        was_classifier_training = classifier.training
+        was_robustifier_training = robustifier.training
+        classifier.eval()
+        robustifier.eval()
         with torch.no_grad():
           epsilon_x_attack = x_epsilon_attack_scheduler.get_eps()
           normalized_x_epsilon_attack = epsilon_x_attack / std
@@ -680,7 +692,10 @@ def main():
             torch.save({'state_dict': classifier_ori.model.state_dict(), 'epoch': epoch}, logger.model_dir + '/classifier_best')
           if args.train_robustifier:
             torch.save({'state_dict': robustifier_ori.state_dict(), 'epoch': epoch}, logger.model_dir + '/robustifier_best')
-
+        if was_classifier_training:
+            classifier.train()
+        if was_robustifier_training:
+            robustifier.train()
       # save model at the end of each 5 epochs
       if np.mod(epoch + 1, args.save_interval) == 0:
         if args.train_classifier:
@@ -733,6 +748,8 @@ def main():
   # Test
 
   if args.test and not(test_loader is None):
+        classifier.eval()
+        robustifier.eval()
         forward_pass = torch.nn.Sequential(normalize, classifier_ori.model)
         
         # Determine which norms to test
