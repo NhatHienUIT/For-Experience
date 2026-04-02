@@ -545,7 +545,7 @@ def main():
           w_rob = zx2x_rob(z=torch.gather(z, 0, idxs.view(-1, 1, 1, 1).expand(args.batch_size, num_channels, height, width)), x=w, x_epsilon= torch.tensor([args.w_epsilon_defense]).float().cuda(), xD_min=torch.tensor([0.0]).float().cuda(), xD_max=torch.tensor([1.0]).float().cuda())
           x = augmentation(acquisition(w_rob, tr1, tr2))
           normalized_x = normalize(x)
-          normalized_x_rob = robustifier(normalized_x)
+          normalized_x_rob = torch.max(torch.min(normalized_x_rob, normalized_x_max.view(1, -1, 1, 1)), normalized_x_min.view(1, -1, 1, 1))
 
           # Scale epsilon based on the chosen norm
           if current_norm == np.inf:
