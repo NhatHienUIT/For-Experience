@@ -56,7 +56,7 @@ def parse_argumments():
   parser.add_argument("--x-augmentation-mnist", action='store_true', help='augment x during training, for mnist')
   parser.add_argument("--x-augmentation-cifar10", action='store_true', help='augment x during training, for cifar')
   parser.add_argument("--save-interval", type=int, default=5, help="interval for saving model (in epochs)")
-
+  parser.add_argument('--visualize', action='store_true', help='Generate plot for 2 successes and 2 fails')
   parser.add_argument("--batch-multiplier", type=int, default=1, help='batch multiplicative factor (reduces memory consumption) - default: 1')
   parser.add_argument("--test-multiplier", type=int, default=1, help='test multiplicative factore (reduces the variance of test) - default: 1' )
 
@@ -921,7 +921,151 @@ def main():
                 import json
                 with open(os.path.join(logger.eval_dir, f'detailed_test_results_{attack_norm_str}.json'), 'w') as f:
                     json.dump(detailed_results, f, indent=2)
+  ###################################################################################################
+  # Multi-Norm Visualization Generation
+  
+  if args.visualize and not(test_loader is None):
+      import matplotlib.pyplot as plt
+      import torch.nn.functional as F
+      import os
 
+      print("\n" + "="*60)
+      print("SCANNING FOR VISUALIZATION SAMPLES...")
+      print("="*60)
+
+      classifier.eval()
+      robustifier.eval()
+
+      # Helper function to handle MNIST (1D) vs CIFAR10 (3D) images for plotting
+      def format_img(tensor):
+          arr = tensor.detach().cpu().squeeze().numpy()
+          if len(arr.shape) == 3:  # (C, H, W) -> (H, W, C)
+              arr = np.transpose(arr, (1, 2, 0))
+          return arr
+
+      # Determine which norms to visualize
+      active_norms = [np.inf, 2.0, 1.0] if args.multi_norm_training else [args.attack_norm]
+      norm_map = {1.0: 'L1', 2.0: 'L2', np.inf: 'Linf'}
+
+      with torch.no_grad():
+          for current_norm in active_norms:
+              attack_norm_str = norm_map.get(current_norm, 'Linf')
+              print(f"\n--- Generating visuals for {attack_norm_str} ---")
+
+              # Scale testing epsilon based on the current norm
+              if current_norm == np.inf:
+                  x_epsilon_attack = args.x_epsilon_attack_testing
+              elif current_norm == 2.0:
+                  x_epsilon_attack = args.x_epsilon_attack_testing * args.l2_eps_multiplier
+              elif current_norm == 1.0:
+                  x_epsilon_attack = args.x_epsilon_attack_testing * args.l1_eps_multiplier
+
+              normalized_x_epsilon_attack = x_epsilon_attack / std
+              
+              success_cases = []
+              fail_cases = []
+
+              for (i, (w, y, idxs)) in enumerate(test_loader):
+                  if len(success_cases) >= 2 and len(fail_cases) >= 2:
+                      break
+
+                  for n in range(w.size(0)):
+                      if len(success_cases) >= 2 and len(fail_cases) >= 2:
+                          break
+
+                      w_single = w[n:n+1].cuda()
+                      y_single = y[n:n+1].cuda()
+                      idx_single = idxs[n:n+1].cuda()
+
+                      # 1. Evaluate Base Image
+                      norm_w = normalize(w_single)
+                      (base_pred, _, _, _, base_ver_err, _) = compute_predictions_and_loss(
+                          classifier, norm_w, normalized_x_min, normalized_x_max,
+                          normalized_x_epsilon_attack, 0.0, args.bound_type,
+                          y_single, num.numpy()[0], ce, current_norm
+                      )
+                      base_prob = F.softmax(base_pred, dim=1)[0, y_single[0]].item() * 100
+                      base_pred_class = torch.argmax(base_pred, dim=1)[0].item()
+
+                      # 2. Evaluate Robustified Image
+                      w_rob_single = zx2x_rob(
+                          z=z[idx_single].unsqueeze(0), x=w_single,
+                          x_epsilon=torch.tensor([args.w_epsilon_defense]).float().cuda(),
+                          xD_min=torch.tensor([0.0]).float().cuda(), xD_max=torch.tensor([1.0]).float().cuda()
+                      )
+                      x_single = acquisition(w_rob_single, tr1, tr2)
+                      norm_x = normalize(x_single)
+                      norm_x_rob = robustifier(norm_x)
+                      norm_x_rob = torch.max(torch.min(norm_x_rob, normalized_x_max.view(1, -1, 1, 1)), normalized_x_min.view(1, -1, 1, 1))
+
+                      (rob_pred, _, _, _, rob_ver_err, _) = compute_predictions_and_loss(
+                          classifier, norm_x_rob, normalized_x_min, normalized_x_max,
+                          normalized_x_epsilon_attack, 0.0, args.bound_type,
+                          y_single, num.numpy()[0], ce, current_norm
+                      )
+                      rob_prob = F.softmax(rob_pred, dim=1)[0, y_single[0]].item() * 100
+                      rob_pred_class = torch.argmax(rob_pred, dim=1)[0].item()
+
+                      x_rob_pixels = (norm_x_rob * std.view(1, -1, 1, 1)) + avg.view(1, -1, 1, 1)
+
+                      case_data = {
+                          'w_img': format_img(w_single),
+                          'x_rob_img': format_img(x_rob_pixels),
+                          'y': y_single[0].item(),
+                          'base_pred': base_pred_class, 'base_prob': base_prob,
+                          'base_ver': "FAIL" if base_ver_err > 0 else "PASS",
+                          'rob_pred': rob_pred_class, 'rob_prob': rob_prob,
+                          'rob_ver': "FAIL" if rob_ver_err > 0 else "PASS"
+                      }
+
+                      # Only count it as a "Fail" if the Robustifier actually failed to verify it
+                      if rob_ver_err == 0.0 and len(success_cases) < 2:
+                          success_cases.append(case_data)
+                          print(f"  > Found Success Case (Label {y_single[0].item()})")
+                      elif rob_ver_err > 0.0 and len(fail_cases) < 2:
+                          fail_cases.append(case_data)
+                          print(f"  > Found Fail Case (Label {y_single[0].item()})")
+
+              # 3. Plot the grid for THIS norm
+              if len(success_cases) == 0 and len(fail_cases) == 0:
+                  print(f"Could not find valid cases for {attack_norm_str}. Skipping plot.")
+                  continue
+
+              all_cases = success_cases + fail_cases
+              fig, axes = plt.subplots(len(all_cases), 3, figsize=(12, 4 * len(all_cases)))
+
+              for r, case in enumerate(all_cases):
+                  # Col 1: Base Image
+                  ax = axes[r, 0]
+                  im1 = ax.imshow(case['w_img'], cmap='viridis', vmin=0, vmax=1)
+                  ax.set_title(f"Base: {case['base_pred']} ({case['base_prob']:.1f}%)\n[Verification: {case['base_ver']}]")
+                  fig.colorbar(im1, ax=ax, fraction=0.046, pad=0.04)
+                  ax.axis('off')
+
+                  # Col 2: Robustified Image
+                  ax = axes[r, 1]
+                  im2 = ax.imshow(case['x_rob_img'], cmap='viridis', vmin=0, vmax=1)
+                  ax.set_title(f"Robustified: {case['rob_pred']} ({case['rob_prob']:.1f}%)\n[Verification: {case['rob_ver']}]")
+                  fig.colorbar(im2, ax=ax, fraction=0.046, pad=0.04)
+                  ax.axis('off')
+
+                  # Col 3: Difference Heatmap
+                  ax = axes[r, 2]
+                  diff = case['x_rob_img'] - case['w_img']
+                  vmax = np.max(np.abs(diff)) 
+                  im3 = ax.imshow(diff, cmap='viridis', vmin=-vmax, vmax=vmax)
+                  ax.set_title(f"Robustification for: {case['y']}")
+                  fig.colorbar(im3, ax=ax, fraction=0.046, pad=0.04)
+                  ax.axis('off')
+
+              plt.suptitle(f"{attack_norm_str} Attack Evaluation", fontsize=16, y=1.02)
+              plt.tight_layout()
+              plot_path = os.path.join(logger.eval_dir, f'robustification_visualization_{attack_norm_str}.png')
+              plt.savefig(plot_path, dpi=300, bbox_inches='tight', facecolor='white')
+              plt.close(fig) # Close the figure to free up memory
+              print(f"SUCCESS! {attack_norm_str} Visualization saved to: {plot_path}")
+
+  ###################################################################################################
   return 0
 
 
