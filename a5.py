@@ -1,8 +1,9 @@
 # Disclaimer: each user is responsible for checking the content of datasets and the applicable licenses and determining if suitable for the intended use and applicable links before the script runs and the data is placed in the user machine.
 
-import argparse, sys, time
+import argparse, sys, time, os
 import pdb
-
+import matplotlib.pyplot as plt
+import torch.nn.functional as F
 import torch.nn
 from utils.utils import *
 import numpy as np
@@ -925,9 +926,6 @@ def main():
   # Multi-Norm Visualization Generation
   
   if args.visualize and not(test_loader is None):
-      import matplotlib.pyplot as plt
-      import torch.nn.functional as F
-      import os
 
       print("\n" + "="*60)
       print("SCANNING FOR VISUALIZATION SAMPLES...")
