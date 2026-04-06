@@ -926,9 +926,6 @@ def main():
   # Multi-Norm Visualization Generation
   
   if args.visualize and not(test_loader is None):
-      import matplotlib.pyplot as plt
-      import torch.nn.functional as F
-      import sys
 
       print("\n" + "="*60)
       print("SCANNING FOR VISUALIZATION SAMPLES...")
