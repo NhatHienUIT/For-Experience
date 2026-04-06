@@ -933,7 +933,8 @@ def main():
 
       classifier.eval()
       robustifier.eval()
-
+      # ADD THIS LINE RIGHT HERE to fix the UnboundLocalError!
+      z = torch.zeros((test_num_samples, num_channels, height, width), dtype=torch.float32, requires_grad=False, device='cuda')
       def format_img(tensor):
           arr = tensor.detach().cpu().squeeze().numpy()
           if len(arr.shape) == 3:  
