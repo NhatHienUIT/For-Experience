@@ -922,28 +922,34 @@ def main():
                 import json
                 with open(os.path.join(logger.eval_dir, f'detailed_test_results_{attack_norm_str}.json'), 'w') as f:
                     json.dump(detailed_results, f, indent=2)
-  ###################################################################################################
-  # Multi-Norm Visualization Generation
+###################################################################################################
+  # Multi-Norm Visualization Generation (Empirical AutoAttack)
   
   if args.visualize and not(test_loader is None):
 
       print("\n" + "="*60)
-      print("SCANNING FOR VISUALIZATION SAMPLES...")
+      print("SCANNING FOR VISUALIZATION SAMPLES (EMPIRICAL AUTOATTACK)...")
       print("="*60)
 
       classifier.eval()
       robustifier.eval()
-      # ADD THIS LINE RIGHT HERE to fix the UnboundLocalError!
+      classifier_ori.eval() # AutoAttack needs the original classifier in eval mode
+
       z = torch.zeros((test_num_samples, num_channels, height, width), dtype=torch.float32, requires_grad=False, device='cuda')
+
       def format_img(tensor):
           arr = tensor.detach().cpu().squeeze().numpy()
           if len(arr.shape) == 3:  
               arr = np.transpose(arr, (1, 2, 0))
-          return arr
+          return np.clip(arr, 0, 1)
 
       active_norms = [np.inf, 2.0, 1.0] if args.multi_norm_training else [args.attack_norm]
       norm_map = {1.0: 'L1', 2.0: 'L2', np.inf: 'Linf'}
 
+      # AutoAttack needs a model that handles normalization internally
+      forward_pass = torch.nn.Sequential(normalize, classifier_ori.model)
+
+      # Keep the main loop in no_grad to save memory, we'll enable it just for the attacks
       with torch.no_grad():
           for current_norm in active_norms:
               attack_norm_str = norm_map.get(current_norm, 'Linf')
@@ -951,116 +957,142 @@ def main():
 
               if current_norm == np.inf:
                   x_epsilon_attack = args.x_epsilon_attack_testing
+                  aa_norm = 'Linf'
               elif current_norm == 2.0:
                   x_epsilon_attack = args.x_epsilon_attack_testing * args.l2_eps_multiplier
+                  aa_norm = 'L2'
               elif current_norm == 1.0:
                   x_epsilon_attack = args.x_epsilon_attack_testing * args.l1_eps_multiplier
-
-              normalized_x_epsilon_attack = x_epsilon_attack / std
+                  aa_norm = 'L1'
               
+              # Initialize AutoAttack specifically for this norm
+              adversary = AutoAttack(forward_pass, norm=aa_norm, eps=x_epsilon_attack, version='standard')
+              adversary.verbose = False # Keep the console clean
+
               success_cases = []
               fail_cases = []
               
               scans = 0
-              max_scans = 100 # Stop searching after 100 images to save time!
+              max_scans = 500 # We scan entire batches now, so we can search deeper!
 
               for (i, (w, y, idxs)) in enumerate(test_loader):
                   if (len(success_cases) >= 2 and len(fail_cases) >= 2) or scans >= max_scans:
                       break
 
-                  for n in range(w.size(0)):
-                      if (len(success_cases) >= 2 and len(fail_cases) >= 2) or scans >= max_scans:
+                  w = w.cuda()
+                  y = y.cuda()
+                  idxs = idxs.cuda()
+                  bs = w.size(0)
+                  scans += bs
+
+                  # 1. Base Images Pipeline
+                  x_base = acquisition(w, tr1, tr2)
+                  norm_x_base = normalize(x_base)
+                  base_logits = classifier_ori.model(norm_x_base)
+                  base_preds = torch.argmax(base_logits, dim=1)
+                  base_probs = F.softmax(base_logits, dim=1)
+
+                  # 2. Robustified Images Pipeline
+                  w_rob = zx2x_rob(
+                      z=torch.gather(z, 0, idxs.view(-1, 1, 1, 1).expand(bs, num_channels, height, width)), 
+                      x=w,
+                      x_epsilon=torch.tensor([args.w_epsilon_defense]).float().cuda(),
+                      xD_min=torch.tensor([0.0]).float().cuda(), xD_max=torch.tensor([1.0]).float().cuda()
+                  )
+                  x_rob_acq = acquisition(w_rob, tr1, tr2)
+                  norm_x_rob = robustifier(normalize(x_rob_acq))
+                  norm_x_rob = torch.max(torch.min(norm_x_rob, normalized_x_max.view(1, -1, 1, 1)), normalized_x_min.view(1, -1, 1, 1))
+                  x_rob_pixels = (norm_x_rob * std.view(1, -1, 1, 1)) + avg.view(1, -1, 1, 1)
+                  
+                  rob_logits = classifier_ori.model(normalize(x_rob_pixels))
+                  rob_preds = torch.argmax(rob_logits, dim=1)
+                  rob_probs = F.softmax(rob_logits, dim=1)
+
+                  # 3. AutoAttack the Base Image
+                  with torch.enable_grad(): # AA requires gradients to work
+                      x_base_adv = adversary.run_standard_evaluation(x_base, y, bs=bs)
+                  base_adv_logits = classifier_ori.model(normalize(x_base_adv))
+                  base_adv_preds = torch.argmax(base_adv_logits, dim=1)
+
+                  # 4. AutoAttack the Robustified Image
+                  with torch.enable_grad():
+                      x_rob_adv = adversary.run_standard_evaluation(x_rob_pixels, y, bs=bs)
+                  rob_adv_logits = classifier_ori.model(normalize(x_rob_adv))
+                  rob_adv_preds = torch.argmax(rob_adv_logits, dim=1)
+                  rob_adv_probs = F.softmax(rob_adv_logits, dim=1)
+
+                  # 5. Extract Cases
+                  for n in range(bs):
+                      if len(success_cases) >= 2 and len(fail_cases) >= 2:
                           break
+
+                      # A success means the robustified image survived the AutoAttack
+                      is_success = (rob_adv_preds[n] == y[n]).item()
                       
-                      scans += 1
-                      
-                      w_single = w[n:n+1].cuda()
-                      y_single = y[n:n+1].cuda()
-                      idx_single = idxs[n:n+1].cuda()
-
-                      # 1. Base Image
-                      norm_w = normalize(w_single)
-                      (base_pred, _, _, _, base_ver_err, _) = compute_predictions_and_loss(
-                          classifier, norm_w, normalized_x_min, normalized_x_max,
-                          normalized_x_epsilon_attack, 0.0, args.bound_type,
-                          y_single, num.numpy()[0], ce, current_norm
-                      )
-                      base_prob = F.softmax(base_pred, dim=1)[0, y_single[0]].item() * 100
-                      base_pred_class = torch.argmax(base_pred, dim=1)[0].item()
-
-                      # 2. Robustified Image (Fixed the unsqueeze bug here!)
-                      w_rob_single = zx2x_rob(
-                          z=z[idx_single], x=w_single,
-                          x_epsilon=torch.tensor([args.w_epsilon_defense]).float().cuda(),
-                          xD_min=torch.tensor([0.0]).float().cuda(), xD_max=torch.tensor([1.0]).float().cuda()
-                      )
-                      x_single = acquisition(w_rob_single, tr1, tr2)
-                      norm_x = normalize(x_single)
-                      norm_x_rob = robustifier(norm_x)
-                      norm_x_rob = torch.max(torch.min(norm_x_rob, normalized_x_max.view(1, -1, 1, 1)), normalized_x_min.view(1, -1, 1, 1))
-
-                      (rob_pred, _, _, _, rob_ver_err, _) = compute_predictions_and_loss(
-                          classifier, norm_x_rob, normalized_x_min, normalized_x_max,
-                          normalized_x_epsilon_attack, 0.0, args.bound_type,
-                          y_single, num.numpy()[0], ce, current_norm
-                      )
-                      rob_prob = F.softmax(rob_pred, dim=1)[0, y_single[0]].item() * 100
-                      rob_pred_class = torch.argmax(rob_pred, dim=1)[0].item()
-
-                      x_rob_pixels = (norm_x_rob * std.view(1, -1, 1, 1)) + avg.view(1, -1, 1, 1)
-
                       case_data = {
-                          'w_img': format_img(w_single),
-                          'x_rob_img': format_img(x_rob_pixels),
-                          'y': y_single[0].item(),
-                          'base_pred': base_pred_class, 'base_prob': base_prob,
-                          'base_ver': "FAIL" if base_ver_err > 0 else "PASS",
-                          'rob_pred': rob_pred_class, 'rob_prob': rob_prob,
-                          'rob_ver': "FAIL" if rob_ver_err > 0 else "PASS"
+                          'w_img': format_img(w[n]),
+                          'x_rob_img': format_img(x_rob_pixels[n]),
+                          'y': y[n].item(),
+                          'base_clean_pred': base_preds[n].item(),
+                          'base_clean_prob': base_probs[n, base_preds[n]].item() * 100,
+                          'base_adv_pred': base_adv_preds[n].item(),
+                          'rob_clean_pred': rob_preds[n].item(),
+                          'rob_clean_prob': rob_probs[n, rob_preds[n]].item() * 100,
+                          'rob_adv_pred': rob_adv_preds[n].item(),
+                          'rob_adv_prob': rob_adv_probs[n, rob_adv_preds[n]].item() * 100
                       }
 
-                      if rob_ver_err == 0.0 and len(success_cases) < 2:
+                      if is_success and len(success_cases) < 2:
                           success_cases.append(case_data)
-                          print(f"  > Found Success Case (Label {y_single[0].item()})")
-                      elif rob_ver_err > 0.0 and len(fail_cases) < 2:
+                          print(f"  > Found Empirical Success (Ground Label {y[n].item()})")
+                      elif not is_success and len(fail_cases) < 2:
                           fail_cases.append(case_data)
-                          print(f"  > Found Fail Case (Label {y_single[0].item()})")
+                          print(f"  > Found Empirical Fail (Ground Label {y[n].item()} -> Fooled to {rob_adv_preds[n].item()})")
 
+              # Plotting Grid
               if len(success_cases) == 0 and len(fail_cases) == 0:
                   print(f"Could not find valid cases for {attack_norm_str}. Skipping plot.")
                   continue
 
               all_cases = success_cases + fail_cases
-              fig, axes = plt.subplots(len(all_cases), 3, figsize=(12, 4 * len(all_cases)))
+              fig, axes = plt.subplots(len(all_cases), 3, figsize=(14, 4.5 * len(all_cases)))
               
-              # Handle case where there's only 1 row (e.g., L1 only finds fails)
               if len(all_cases) == 1:
                   axes = np.expand_dims(axes, axis=0)
 
               for r, case in enumerate(all_cases):
+                  # Col 1: Base Image (Removed colorbar for cleaner look)
                   ax = axes[r, 0]
-                  im1 = ax.imshow(case['w_img'], cmap='viridis', vmin=0, vmax=1)
-                  ax.set_title(f"Base: {case['base_pred']} ({case['base_prob']:.1f}%)\n[Verification: {case['base_ver']}]")
-                  fig.colorbar(im1, ax=ax, fraction=0.046, pad=0.04)
+                  ax.imshow(case['w_img'], cmap='gray' if num_channels==1 else None)
+                  ax.set_title(f"Clean Pred: {case['base_clean_pred']} ({case['base_clean_prob']:.1f}%)\nAttacked Pred: {case['base_adv_pred']}", fontsize=12)
                   ax.axis('off')
 
+                  # Col 2: Robustified Image
                   ax = axes[r, 1]
-                  im2 = ax.imshow(case['x_rob_img'], cmap='viridis', vmin=0, vmax=1)
-                  ax.set_title(f"Robustified: {case['rob_pred']} ({case['rob_prob']:.1f}%)\n[Verification: {case['rob_ver']}]")
-                  fig.colorbar(im2, ax=ax, fraction=0.046, pad=0.04)
+                  ax.imshow(case['x_rob_img'], cmap='gray' if num_channels==1 else None)
+                  ax.set_title(f"Rob Pred: {case['rob_clean_pred']} ({case['rob_clean_prob']:.1f}%)\nAttacked Rob Pred: {case['rob_adv_pred']} ({case['rob_adv_prob']:.1f}%)", fontsize=12)
                   ax.axis('off')
 
+                  # Col 3: Difference Heatmap ("Cleared" version)
                   ax = axes[r, 2]
                   diff = case['x_rob_img'] - case['w_img']
-                  vmax = np.max(np.abs(diff)) if np.max(np.abs(diff)) > 0 else 1.0
-                  im3 = ax.imshow(diff, cmap='viridis', vmin=-vmax, vmax=vmax)
-                  ax.set_title(f"Robustification for: {case['y']}")
+                  
+                  # If color image (CIFAR), average the channels for a cleaner heatmap
+                  if len(diff.shape) == 3 and diff.shape[-1] == 3: 
+                      diff_viz = np.mean(diff, axis=-1)
+                  else:
+                      diff_viz = diff
+
+                  vmax = np.max(np.abs(diff_viz)) if np.max(np.abs(diff_viz)) > 0 else 1e-5
+                  # Use 'bwr' (Blue-White-Red) centered at 0!
+                  im3 = ax.imshow(diff_viz, cmap='bwr', vmin=-vmax, vmax=vmax)
+                  ax.set_title(f"Robustification for Ground Label: {case['y']}", fontsize=12)
                   fig.colorbar(im3, ax=ax, fraction=0.046, pad=0.04)
                   ax.axis('off')
 
-              plt.suptitle(f"{attack_norm_str} Attack Evaluation", fontsize=16, y=1.02)
+              plt.suptitle(f"{attack_norm_str} Empirical AutoAttack Evaluation", fontsize=16, y=1.02)
               plt.tight_layout()
-              plot_path = os.path.join(logger.eval_dir, f'robustification_visualization_{attack_norm_str}.png')
+              plot_path = os.path.join(logger.eval_dir, f'empirical_visualization_{attack_norm_str}.png')
               plt.savefig(plot_path, dpi=300, bbox_inches='tight', facecolor='white')
               plt.close(fig) 
               print(f"SUCCESS! {attack_norm_str} Visualization saved to: {plot_path}")
