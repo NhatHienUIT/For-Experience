@@ -926,6 +926,9 @@ def main():
   # Multi-Norm Visualization Generation
   
   if args.visualize and not(test_loader is None):
+      import matplotlib.pyplot as plt
+      import torch.nn.functional as F
+      import sys
 
       print("\n" + "="*60)
       print("SCANNING FOR VISUALIZATION SAMPLES...")
@@ -934,14 +937,12 @@ def main():
       classifier.eval()
       robustifier.eval()
 
-      # Helper function to handle MNIST (1D) vs CIFAR10 (3D) images for plotting
       def format_img(tensor):
           arr = tensor.detach().cpu().squeeze().numpy()
-          if len(arr.shape) == 3:  # (C, H, W) -> (H, W, C)
+          if len(arr.shape) == 3:  
               arr = np.transpose(arr, (1, 2, 0))
           return arr
 
-      # Determine which norms to visualize
       active_norms = [np.inf, 2.0, 1.0] if args.multi_norm_training else [args.attack_norm]
       norm_map = {1.0: 'L1', 2.0: 'L2', np.inf: 'Linf'}
 
@@ -950,7 +951,6 @@ def main():
               attack_norm_str = norm_map.get(current_norm, 'Linf')
               print(f"\n--- Generating visuals for {attack_norm_str} ---")
 
-              # Scale testing epsilon based on the current norm
               if current_norm == np.inf:
                   x_epsilon_attack = args.x_epsilon_attack_testing
               elif current_norm == 2.0:
@@ -962,20 +962,25 @@ def main():
               
               success_cases = []
               fail_cases = []
+              
+              scans = 0
+              max_scans = 100 # Stop searching after 100 images to save time!
 
               for (i, (w, y, idxs)) in enumerate(test_loader):
-                  if len(success_cases) >= 2 and len(fail_cases) >= 2:
+                  if (len(success_cases) >= 2 and len(fail_cases) >= 2) or scans >= max_scans:
                       break
 
                   for n in range(w.size(0)):
-                      if len(success_cases) >= 2 and len(fail_cases) >= 2:
+                      if (len(success_cases) >= 2 and len(fail_cases) >= 2) or scans >= max_scans:
                           break
-
+                      
+                      scans += 1
+                      
                       w_single = w[n:n+1].cuda()
                       y_single = y[n:n+1].cuda()
                       idx_single = idxs[n:n+1].cuda()
 
-                      # 1. Evaluate Base Image
+                      # 1. Base Image
                       norm_w = normalize(w_single)
                       (base_pred, _, _, _, base_ver_err, _) = compute_predictions_and_loss(
                           classifier, norm_w, normalized_x_min, normalized_x_max,
@@ -985,9 +990,9 @@ def main():
                       base_prob = F.softmax(base_pred, dim=1)[0, y_single[0]].item() * 100
                       base_pred_class = torch.argmax(base_pred, dim=1)[0].item()
 
-                      # 2. Evaluate Robustified Image
+                      # 2. Robustified Image (Fixed the unsqueeze bug here!)
                       w_rob_single = zx2x_rob(
-                          z=z[idx_single].unsqueeze(0), x=w_single,
+                          z=z[idx_single], x=w_single,
                           x_epsilon=torch.tensor([args.w_epsilon_defense]).float().cuda(),
                           xD_min=torch.tensor([0.0]).float().cuda(), xD_max=torch.tensor([1.0]).float().cuda()
                       )
@@ -1016,7 +1021,6 @@ def main():
                           'rob_ver': "FAIL" if rob_ver_err > 0 else "PASS"
                       }
 
-                      # Only count it as a "Fail" if the Robustifier actually failed to verify it
                       if rob_ver_err == 0.0 and len(success_cases) < 2:
                           success_cases.append(case_data)
                           print(f"  > Found Success Case (Label {y_single[0].item()})")
@@ -1024,33 +1028,33 @@ def main():
                           fail_cases.append(case_data)
                           print(f"  > Found Fail Case (Label {y_single[0].item()})")
 
-              # 3. Plot the grid for THIS norm
               if len(success_cases) == 0 and len(fail_cases) == 0:
                   print(f"Could not find valid cases for {attack_norm_str}. Skipping plot.")
                   continue
 
               all_cases = success_cases + fail_cases
               fig, axes = plt.subplots(len(all_cases), 3, figsize=(12, 4 * len(all_cases)))
+              
+              # Handle case where there's only 1 row (e.g., L1 only finds fails)
+              if len(all_cases) == 1:
+                  axes = np.expand_dims(axes, axis=0)
 
               for r, case in enumerate(all_cases):
-                  # Col 1: Base Image
                   ax = axes[r, 0]
                   im1 = ax.imshow(case['w_img'], cmap='viridis', vmin=0, vmax=1)
                   ax.set_title(f"Base: {case['base_pred']} ({case['base_prob']:.1f}%)\n[Verification: {case['base_ver']}]")
                   fig.colorbar(im1, ax=ax, fraction=0.046, pad=0.04)
                   ax.axis('off')
 
-                  # Col 2: Robustified Image
                   ax = axes[r, 1]
                   im2 = ax.imshow(case['x_rob_img'], cmap='viridis', vmin=0, vmax=1)
                   ax.set_title(f"Robustified: {case['rob_pred']} ({case['rob_prob']:.1f}%)\n[Verification: {case['rob_ver']}]")
                   fig.colorbar(im2, ax=ax, fraction=0.046, pad=0.04)
                   ax.axis('off')
 
-                  # Col 3: Difference Heatmap
                   ax = axes[r, 2]
                   diff = case['x_rob_img'] - case['w_img']
-                  vmax = np.max(np.abs(diff)) 
+                  vmax = np.max(np.abs(diff)) if np.max(np.abs(diff)) > 0 else 1.0
                   im3 = ax.imshow(diff, cmap='viridis', vmin=-vmax, vmax=vmax)
                   ax.set_title(f"Robustification for: {case['y']}")
                   fig.colorbar(im3, ax=ax, fraction=0.046, pad=0.04)
@@ -1060,8 +1064,11 @@ def main():
               plt.tight_layout()
               plot_path = os.path.join(logger.eval_dir, f'robustification_visualization_{attack_norm_str}.png')
               plt.savefig(plot_path, dpi=300, bbox_inches='tight', facecolor='white')
-              plt.close(fig) # Close the figure to free up memory
+              plt.close(fig) 
               print(f"SUCCESS! {attack_norm_str} Visualization saved to: {plot_path}")
+
+      print("\nVisualizations complete! Exiting to skip the standard test loop.")
+      sys.exit(0)
 
   ###################################################################################################
   return 0
